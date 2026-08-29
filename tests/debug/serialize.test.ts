@@ -53,6 +53,7 @@ describe('serializeTuning', () => {
       '// landing',
       '// scoring',
       '// render',
+      '// feedback',
       '// generation',
     ])
   })

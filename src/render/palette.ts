@@ -21,4 +21,14 @@ export const PALETTE = {
   line: 'rgba(226, 234, 238, 0.85)',
   arc: 'rgba(200, 220, 235, 0.16)',
   ghost: 'rgba(220, 235, 245, 0.35)',
+  /** Altitude shadow on the water, under the rider. */
+  shadow: 'rgba(8, 18, 26, 0.45)',
+  // The three landing verdicts (spec §3.7). Green, amber and red, because the
+  // one thing this feedback cannot afford is to need explaining.
+  clean: '#5fe0b0',
+  sketchy: '#f2b23c',
+  wipeout: '#ff5f57',
+  sprayClean: '#dff6ff',
+  spraySketchy: '#b9ccd6',
+  sprayWipeout: '#eef7fb',
 }

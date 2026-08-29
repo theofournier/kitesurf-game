@@ -7,14 +7,17 @@ const H = 800
 const FRAME = 1 / 60
 
 /** Runs the camera to rest at a fixed rider altitude. */
-function settle(altitude: number, riderX = 0, seconds = 3) {
+function settle(altitude: number, riderX = 0, seconds = 3, height = H) {
   const camera = createCamera()
   const frames = Math.round(seconds / FRAME)
   for (let i = 0; i < frames; i++) {
-    updateCamera(camera, W, H, riderX, altitude, FRAME)
+    updateCamera(camera, W, height, riderX, altitude, FRAME)
   }
   return camera
 }
+
+/** A landscape phone, which is the viewport the framing has to survive. */
+const PHONE_H = 400
 
 describe('updateCamera', () => {
   it('anchors the rider at ANCHOR_X of the width', () => {
@@ -56,6 +59,29 @@ describe('updateCamera', () => {
 
     expect(camera.alt).toBeGreaterThan(0)
     expect(camera.alt).toBeLessThan(10 * TUNING.CAM_ALT_FOLLOW)
+  })
+
+  it('lets the kite leave the top of the frame at the apex of a big air', () => {
+    // Spec §6.4: at the peak of a big air the kite exits the frame — let it,
+    // and draw the lines running off after it. Nothing may clamp it back in,
+    // so the test is that the top of the window arc goes above the frame while
+    // the rider is still comfortably inside it.
+    const air = settle(16, 0, 3, PHONE_H)
+    expect(air.harnessY - TUNING.LINE_RADIUS).toBeLessThan(0)
+
+    expect(air.feetY).toBeGreaterThan(0)
+    expect(air.feetY).toBeLessThan(PHONE_H)
+  })
+
+  it('keeps climbing with altitude rather than topping out', () => {
+    // A clamp anywhere in the follow would flatten the read exactly where the
+    // height matters most, so the response stays linear all the way up.
+    const four = settle(4)
+    const twelve = settle(12)
+    const twenty = settle(20)
+
+    expect(four.feetY - twelve.feetY).toBeGreaterThan(0)
+    expect(twelve.feetY - twenty.feetY).toBeCloseTo(four.feetY - twelve.feetY, 1)
   })
 
   it('hangs the harness on the rider, below the top of the box', () => {

@@ -43,6 +43,11 @@ export const TUNING = {
   SKETCHY_BAND: [20, 85],
   SOFT_LAND: 8,           // m/s descent
   HARD_LAND: 14,
+  CLEAN_QUALITY: 1.0,     // landingQuality of a clean touchdown (spec §3.7)
+  SKETCHY_QUALITY: 0.4,
+  SKETCHY_SPEED_LOSS: 0.25, // share of speed a sketchy landing takes away
+  LAND_RECOVER: 0.25,     // s, the landing beat before riding resumes
+  WIPEOUT_RECOVER: 2.0,   // s, relaunch beat with the kite down (spec §7.2)
 
   // scoring
   HEIGHT_EXP: 1.5,
@@ -69,6 +74,17 @@ export const TUNING = {
   PARALLAX_FAR: 0.15,     // scroll rate of the far water band, x rider speed
   PARALLAX_MID: 0.45,
   PARALLAX_NEAR: 1.15,
+
+  // feedback
+  SHAKE_CLEAN: 3,         // px of screen shake on a clean landing
+  SHAKE_SKETCHY: 9,
+  SHAKE_WIPEOUT: 20,
+  SHAKE_DECAY: 6,         // 1/s, how fast the shake dies away
+  SPRAY_CLEAN: 26,        // spray particles thrown by a clean landing
+  SPRAY_SKETCHY: 14,
+  SPRAY_WIPEOUT: 44,
+  FLASH_TIME: 0.9,        // s the landing verdict holds on screen
+  SHADOW_FADE_M: 14,      // m of altitude over which the water shadow fades out
 
   // generation
   REACTION_MIN: 0.55,     // s

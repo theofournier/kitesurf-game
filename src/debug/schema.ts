@@ -4,6 +4,7 @@
 // the dump reads it for grouping and comments, which keeps both honest and
 // lets the whole thing be unit-tested headless.
 import { TUNING } from '../config/tuning.ts'
+import { SPRAY_MAX } from '../render/effects.ts'
 
 export type TuningKey = keyof typeof TUNING
 
@@ -134,6 +135,21 @@ export const TUNING_SCHEMA: TuningGroup[] = [
       },
       { key: 'SOFT_LAND', comment: 'm/s descent' },
       { key: 'HARD_LAND' },
+      // The two qualities are what the spec §3.7 table pays out: 0..1, and
+      // clean is the top of the scale by definition.
+      {
+        key: 'CLEAN_QUALITY',
+        comment: 'landingQuality of a clean touchdown (spec §3.7)',
+        fields: [{ min: 0, max: 1 }],
+      },
+      { key: 'SKETCHY_QUALITY', fields: [{ min: 0, max: 1 }] },
+      {
+        key: 'SKETCHY_SPEED_LOSS',
+        comment: 'share of speed a sketchy landing takes away',
+        fields: [{ min: 0, max: 1 }],
+      },
+      { key: 'LAND_RECOVER', comment: 's, the landing beat before riding resumes' },
+      { key: 'WIPEOUT_RECOVER', comment: 's, relaunch beat with the kite down (spec §7.2)' },
     ],
   },
   {
@@ -188,6 +204,34 @@ export const TUNING_SCHEMA: TuningGroup[] = [
       },
       { key: 'PARALLAX_MID', fields: [{ min: 0, max: 2 }] },
       { key: 'PARALLAX_NEAR', fields: [{ min: 0, max: 2 }] },
+    ],
+  },
+  {
+    title: 'feedback',
+    slots: [
+      // Shake and spray are how the landing table reads without the HUD, so
+      // they start at nothing: a zero here is a legitimate "turn it off".
+      {
+        key: 'SHAKE_CLEAN',
+        comment: 'px of screen shake on a clean landing',
+        fields: [{ min: 0, max: 40 }],
+      },
+      { key: 'SHAKE_SKETCHY', fields: [{ min: 0, max: 40 }] },
+      { key: 'SHAKE_WIPEOUT', fields: [{ min: 0, max: 40 }] },
+      { key: 'SHAKE_DECAY', comment: '1/s, how fast the shake dies away' },
+      {
+        key: 'SPRAY_CLEAN',
+        comment: 'spray particles thrown by a clean landing',
+        fields: [{ min: 0, max: SPRAY_MAX, step: 1 }],
+      },
+      { key: 'SPRAY_SKETCHY', fields: [{ min: 0, max: SPRAY_MAX, step: 1 }] },
+      { key: 'SPRAY_WIPEOUT', fields: [{ min: 0, max: SPRAY_MAX, step: 1 }] },
+      { key: 'FLASH_TIME', comment: 's the landing verdict holds on screen' },
+      {
+        key: 'SHADOW_FADE_M',
+        comment: 'm of altitude over which the water shadow fades out',
+        fields: [{ min: 1 }],
+      },
     ],
   },
   {

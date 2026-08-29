@@ -2,7 +2,9 @@
 // panel. Wiring only — game logic lives in /src/sim and drawing in /src/render.
 import { createAnchor, createDesktopInput } from './input/desktop.ts'
 import { advance, createAccumulator, createInput, createSimState } from './sim/loop.ts'
+import { PHASE } from './sim/rider.ts'
 import { createCamera, updateCamera } from './render/camera.ts'
+import { createEffects, updateEffects } from './render/effects.ts'
 import { drawScene } from './render/scene.ts'
 import { captureSnapshot, createSnapshot, createView, interpolateView } from './render/view.ts'
 
@@ -23,6 +25,7 @@ const accumulator = createAccumulator()
 
 const camera = createCamera()
 const view = createView()
+const effects = createEffects()
 /**
  * The two sim snapshots the render interpolates between: `previous` is the
  * state before the most recent step, `pending` is the one being captured for
@@ -74,9 +77,11 @@ function watchDpr(): void {
 
 /**
  * Watched in the debug panel: the values the window is tuned against (build
- * plan session 3), what the load and pop are doing (session 4), then the loop
- * diagnostics. Pre-allocated, and only written when the panel is up, so the
- * loop stays allocation-free either way.
+ * plan session 3), what the load and pop are doing (session 4), the air and the
+ * landing verdict (session 5), then the loop diagnostics. Pre-allocated, and
+ * only written when the panel is up, so the loop stays allocation-free either
+ * way — `state` is seeded with a phase name so the panel builds a string
+ * monitor for it rather than a numeric one.
  */
 const readout = {
   kiteAngle: 0,
@@ -84,7 +89,13 @@ const readout = {
   speed: 0,
   wind: 0,
   load: 0,
+  state: PHASE.RIDING as string,
   altitude: 0,
+  vSpeed: 0,
+  apex: 0,
+  airTime: 0,
+  descent: 0,
+  quality: 0,
   lastPop: 0,
   fps: 0,
   tick: 0,
@@ -121,7 +132,8 @@ function frame(now: number): void {
   anchor.x = camera.anchorX
   anchor.y = camera.harnessY
 
-  drawScene(ctx, camera, view)
+  updateEffects(effects, camera, view, frameTime)
+  drawScene(ctx, camera, view, effects)
 
   if (debugEnabled) {
     if (frameTime > 0) {
@@ -132,7 +144,13 @@ function frame(now: number): void {
     readout.speed = state.rider.speed
     readout.wind = state.wind
     readout.load = state.rider.load
+    readout.state = state.rider.phase
     readout.altitude = state.rider.altitude
+    readout.vSpeed = state.rider.vSpeed
+    readout.apex = state.rider.apex
+    readout.airTime = state.rider.airTime
+    readout.descent = state.rider.descentRate
+    readout.quality = state.rider.landingQuality
     readout.lastPop = state.rider.lastPop
     readout.tick = state.tick
     readout.time = state.time

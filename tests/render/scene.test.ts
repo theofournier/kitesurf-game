@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { TUNING } from '../../src/config/tuning.ts'
 import { createCamera, updateCamera } from '../../src/render/camera.ts'
+import { createEffects } from '../../src/render/effects.ts'
 import { drawScene } from '../../src/render/scene.ts'
 import { createView } from '../../src/render/view.ts'
 
@@ -24,13 +25,21 @@ function frameAt(riderX: number) {
     lineTo: noop,
     quadraticCurveTo: noop,
     arc: noop,
+    ellipse: noop,
     beginPath: noop,
     closePath: noop,
     fill: noop,
     stroke: noop,
+    fillText: noop,
+    save: noop,
+    restore: noop,
+    translate: noop,
     fillStyle: '',
     strokeStyle: '',
     lineWidth: 0,
+    globalAlpha: 1,
+    font: '',
+    textAlign: 'left',
   } as unknown as CanvasRenderingContext2D
 
   const camera = createCamera()
@@ -42,7 +51,7 @@ function frameAt(riderX: number) {
   view.x = riderX
   view.wind = TUNING.WIND_BASE
 
-  drawScene(ctx, camera, view)
+  drawScene(ctx, camera, view, createEffects())
   return { rects, camera }
 }
 

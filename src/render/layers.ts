@@ -42,13 +42,24 @@ function drawStreakRow(
   }
 }
 
-/** Sky above the horizon, sea below it. Flat fills: the shape is the point. */
-export function drawSky(ctx: CanvasRenderingContext2D, width: number, camera: Camera): void {
+/**
+ * Sky above the horizon, sea below it. Flat fills: the shape is the point.
+ *
+ * `bleed` widens the flats past the frame on every side. The landing shake
+ * translates the whole world (see scene.ts), and a flat that stopped at the
+ * frame edge would leave a bare sliver there for as long as the shake lasted.
+ */
+export function drawSky(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  camera: Camera,
+  bleed = 0,
+): void {
   ctx.fillStyle = PALETTE.sky
-  ctx.fillRect(0, 0, width, camera.horizonY)
+  ctx.fillRect(-bleed, -bleed, width + bleed * 2, camera.horizonY + bleed)
 
   ctx.fillStyle = PALETTE.horizon
-  ctx.fillRect(0, camera.horizonY, width, 1)
+  ctx.fillRect(-bleed, camera.horizonY, width + bleed * 2, 1)
 }
 
 /**
@@ -64,14 +75,16 @@ export function drawWater(
   width: number,
   height: number,
   camera: Camera,
+  bleed = 0,
 ): void {
   const horizon = camera.horizonY
   const water = camera.waterY
+  const wide = width + bleed * 2
 
   ctx.fillStyle = PALETTE.seaFar
-  ctx.fillRect(0, horizon, width, Math.max(0, water - horizon))
+  ctx.fillRect(-bleed, horizon, wide, Math.max(0, water - horizon))
   ctx.fillStyle = PALETTE.sea
-  ctx.fillRect(0, water, width, Math.max(0, height - water))
+  ctx.fillRect(-bleed, water, wide, Math.max(0, height - water) + bleed)
 
   const gap = water - horizon
   const farEnd = horizon + gap * FAR_BAND
@@ -91,7 +104,7 @@ export function drawWater(
   // The waterline: the rider's own plane, and the line altitude is measured
   // against. It moves down the screen as the camera climbs.
   ctx.fillStyle = PALETTE.waterline
-  ctx.fillRect(0, water, width, 1)
+  ctx.fillRect(-bleed, water, wide, 1)
 
   ctx.fillStyle = PALETTE.streakNear
   for (let row = 0; row < BAND_ROWS; row++) {

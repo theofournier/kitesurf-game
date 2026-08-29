@@ -5,6 +5,7 @@
 // one place and keeps every draw function a pure function of a plain struct.
 import { lineTension } from '../sim/kite.ts'
 import type { SimState } from '../sim/loop.ts'
+import { PHASE, type Phase } from '../sim/rider.ts'
 
 /** The sim values worth interpolating: everything that moves on screen. */
 export interface Snapshot {
@@ -23,6 +24,20 @@ export interface RenderView extends Snapshot {
   wind: number
   /** Line load, 0..1 (spec §6.3). */
   tension: number
+  /** Which phase of a run the rider is in (spec §3.7). */
+  phase: Phase
+  /** Vertical velocity, m/s. Positive up. */
+  vSpeed: number
+  /** Highest altitude of the current or most recent air, m. */
+  apex: number
+  /** What the last touchdown scored, 0..1 (spec §3.7). */
+  landingQuality: number
+  /**
+   * Touchdowns so far. The landing feedback fires on this changing rather than
+   * on the phase, so a landing is reacted to exactly once even if two frames
+   * fall inside the same beat.
+   */
+  landings: number
 }
 
 export function createSnapshot(): Snapshot {
@@ -41,6 +56,11 @@ export function createView(): RenderView {
     speed: 0,
     wind: 0,
     tension: 0,
+    phase: PHASE.RIDING,
+    vSpeed: 0,
+    apex: 0,
+    landingQuality: 0,
+    landings: 0,
   }
 }
 
@@ -82,5 +102,10 @@ export function interpolateView(
   // rather than for their motion.
   view.speed = state.rider.speed
   view.wind = state.wind
+  view.phase = state.rider.phase
+  view.vSpeed = state.rider.vSpeed
+  view.apex = state.rider.apex
+  view.landingQuality = state.rider.landingQuality
+  view.landings = state.rider.landings
   view.tension = lineTension(view.kiteAngle, view.speed, view.wind)
 }

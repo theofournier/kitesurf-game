@@ -1,9 +1,9 @@
-// Rider physics (spec §3.3, §3.4, §3.5). Drive, the load the player builds
-// against it, and the pop that spends it.
+// Rider physics (spec §3.3 – §3.7). Drive, the load the player builds against
+// it, the pop that spends it, the air it buys, and what the touchdown is worth.
 //
-// The air phase is deliberately thin here: gravity carries the pop to its apex
-// and back down, because a pop with nowhere to go cannot be tuned or tested.
-// Float (§3.6) and the landing table (§3.7) are the next session's work.
+// The phase machine is the spine of a run:
+//
+//     RIDING → LOADING → AIRBORNE → LANDING | WIPEOUT → RIDING
 //
 // Pure: mutates a preallocated RiderState in place, allocates nothing per step.
 import { TUNING } from '../config/tuning.ts'
@@ -25,6 +25,26 @@ import type { RiderInput } from './loop.ts'
  * TUNING one — same reasoning as ANGLE_EPS in kite.ts.
  */
 const OVERLOAD_EPS = 1e-9
+
+/**
+ * The phases of a run (spec §3.7). Strings rather than an enum because they go
+ * straight into the debug readout and into test failure messages, and reading
+ * one out of this object allocates nothing.
+ */
+export const PHASE = {
+  /** On the water, not edging. */
+  RIDING: 'RIDING',
+  /** On the water with the input held: building load against the edge. */
+  LOADING: 'LOADING',
+  /** Off the water, between the pop and the touchdown. */
+  AIRBORNE: 'AIRBORNE',
+  /** The beat after a landing that scored — clean or sketchy. */
+  LANDING: 'LANDING',
+  /** The beat after a landing that did not: kite down, speed gone (§7.2). */
+  WIPEOUT: 'WIPEOUT',
+} as const
+
+export type Phase = (typeof PHASE)[keyof typeof PHASE]
 
 export interface RiderState {
   kite: KiteState
@@ -54,6 +74,24 @@ export interface RiderState {
   loading: boolean
   /** Impulse of the most recent pop, m/s. Read by debug and feedback only. */
   lastPop: number
+  /** Which of the five phases the rider is in (spec §3.7). */
+  phase: Phase
+  /** Seconds left of a LANDING or WIPEOUT beat. 0 in every other phase. */
+  recover: number
+  /** Highest altitude of the current air, m. Held after touchdown. */
+  apex: number
+  /** Seconds since the pop. Held after touchdown as that air's hangtime. */
+  airTime: number
+  /** Descent rate at the last touchdown, m/s, positive downward (spec §3.7). */
+  descentRate: number
+  /** What the last touchdown was worth, 0..1 (spec §3.7). */
+  landingQuality: number
+  /**
+   * Touchdowns evaluated so far. Every air increments it exactly once, which is
+   * both the guarantee the landing table is applied once and the edge the
+   * renderer fires its feedback off.
+   */
+  landings: number
 }
 
 export function createRiderState(): RiderState {
@@ -69,6 +107,13 @@ export function createRiderState(): RiderState {
     popForfeit: false,
     loading: false,
     lastPop: 0,
+    phase: PHASE.RIDING,
+    recover: 0,
+    apex: 0,
+    airTime: 0,
+    descentRate: 0,
+    landingQuality: 0,
+    landings: 0,
   }
 }
 
@@ -151,6 +196,55 @@ export function popImpulse(load: number, theta: number, wind: number, kickerBonu
 }
 
 /**
+ * Upward acceleration the kite makes while airborne, m/s² (spec §3.6):
+ *
+ *     vSpeed += liftFactor(θ) * FLOAT_K * windPower * dt
+ *
+ * Max at zenith, ~0 at the edge of the window, and always well under GRAVITY —
+ * float is a hangtime modifier, never a second engine. Holding the kite up
+ * stretches the air; dropping it cuts it short. That, and nothing else, is what
+ * makes the arc steerable enough for clearing an obstacle to be a decision.
+ */
+export function floatAccel(theta: number, wind: number): number {
+  return liftFactor(theta) * TUNING.FLOAT_K * windPower(wind)
+}
+
+/**
+ * The landing table (spec §3.7), evaluated at touchdown. Returns
+ * `landingQuality`: 1.0 clean, 0.4 sketchy, 0 wipeout.
+ *
+ * `descent` is the descent rate, positive downward. The rows are tested in the
+ * spec's order and anything that matches neither is a wipeout, which covers
+ * both of the spec's explicit wipeout rows — a kite still parked at zenith
+ * (θ < 20) and a descent at or past HARD_LAND — plus the case its table leaves
+ * out, a kite dumped past the sketchy band with a gentle descent. Landing with
+ * the kite at the edge of the window is a wipeout for the same reason landing
+ * with it at zenith is: it is not pulling in the direction of travel.
+ *
+ * Redirecting the kite back toward the direction of travel before touchdown is
+ * the third timing window of the game, after load duration and send timing.
+ */
+export function landingQuality(theta: number, descent: number): number {
+  if (
+    theta >= TUNING.CLEAN_BAND[0] &&
+    theta <= TUNING.CLEAN_BAND[1] &&
+    descent < TUNING.SOFT_LAND
+  ) {
+    return TUNING.CLEAN_QUALITY
+  }
+
+  if (
+    theta >= TUNING.SKETCHY_BAND[0] &&
+    theta <= TUNING.SKETCHY_BAND[1] &&
+    descent < TUNING.HARD_LAND
+  ) {
+    return TUNING.SKETCHY_QUALITY
+  }
+
+  return 0
+}
+
+/**
  * The edge catches (spec §3.4): speed drops by STALL_SPEED_LOSS, the load is
  * gone, and so is the pop it was building. Without this the optimal play is to
  * hold maximum at all times.
@@ -183,6 +277,8 @@ function release(rider: RiderState, wind: number): void {
   if (impulse > 0) {
     rider.vSpeed = impulse
     rider.airborne = true
+    rider.apex = 0
+    rider.airTime = 0
   }
 
   rider.lastPop = impulse
@@ -192,35 +288,108 @@ function release(rider: RiderState, wind: number): void {
 }
 
 /**
+ * Touchdown (spec §3.7). Runs on the one step where the air ends, and is the
+ * only place `landings` moves — the landing table is applied exactly once per
+ * air, whatever the descent did afterwards.
+ */
+function touchdown(rider: RiderState): void {
+  const descent = -rider.vSpeed
+  const quality = landingQuality(rider.kite.angle, descent)
+
+  rider.altitude = 0
+  rider.vSpeed = 0
+  rider.airborne = false
+  rider.descentRate = descent
+  rider.landingQuality = quality
+  rider.landings += 1
+
+  if (quality <= 0) {
+    // Wipeout (spec §7.2): all speed lost, and the kite is in the water for the
+    // relaunch beat — no drive and no load until it is back in the window.
+    rider.speed = 0
+    rider.load = 0
+    rider.overload = 0
+    rider.popForfeit = false
+    rider.phase = PHASE.WIPEOUT
+    rider.recover = TUNING.WIPEOUT_RECOVER
+    return
+  }
+
+  // Sketchy: the edge bites badly and costs speed, but the trick still counts.
+  if (quality < TUNING.CLEAN_QUALITY) rider.speed *= 1 - TUNING.SKETCHY_SPEED_LOSS
+  rider.phase = PHASE.LANDING
+  rider.recover = TUNING.LAND_RECOVER
+}
+
+/**
+ * One step of the air (spec §3.6): ballistic, plus whatever float the kite is
+ * making. Drive is absent at every kite angle — you cannot accelerate in the
+ * air — so `speed` is untouched here and the jump carries the speed it left on.
+ */
+function stepAir(rider: RiderState, wind: number, dt: number): void {
+  rider.vSpeed -= TUNING.GRAVITY * dt
+  rider.vSpeed += floatAccel(rider.kite.angle, wind) * dt
+  rider.altitude += rider.vSpeed * dt
+  rider.airTime += dt
+  if (rider.altitude > rider.apex) rider.apex = rider.altitude
+
+  if (rider.altitude <= 0) touchdown(rider)
+}
+
+/** One step on the water (spec §3.3, §3.4): drive against drag, and load. */
+function stepWater(rider: RiderState, input: RiderInput, wind: number, dt: number): void {
+  // The relaunch beat is dead time by design: the kite is in the water, so
+  // there is nothing to drive against and nothing to edge against either.
+  if (rider.phase === PHASE.WIPEOUT) return
+
+  let speed = rider.speed + driveAccel(rider.kite.angle, rider.speed, wind) * dt
+  if (speed < 0) speed = 0
+  else if (speed > TUNING.MAX_SPEED) speed = TUNING.MAX_SPEED
+  rider.speed = speed
+
+  if (input.loading) buildLoad(rider, dt)
+}
+
+/**
+ * Phase bookkeeping (spec §3.7), run last so it sees the step it is describing.
+ *
+ * The air and the two recovery beats own the phase outright; on the water it is
+ * only ever a readout of whether the player is edging. LANDING and WIPEOUT are
+ * entered by `touchdown` and left here, when their beat runs out.
+ */
+function stepPhase(rider: RiderState, input: RiderInput, dt: number): void {
+  if (rider.airborne) {
+    rider.phase = PHASE.AIRBORNE
+    rider.recover = 0
+    return
+  }
+
+  if (rider.recover > 0) {
+    rider.recover -= dt
+    if (rider.recover > 0) return
+    rider.recover = 0
+  }
+
+  rider.phase = input.loading ? PHASE.LOADING : PHASE.RIDING
+}
+
+/**
  * Advance the rider one fixed step.
  *
  * The kite slews first and always: steering is live every frame and the load
- * input never gates it (spec §5.2). Then the rider either drives and loads on
- * the water, or coasts through the air — spec §3.6 gives the air no drive at
- * any kite angle, so the only thing acting on a jump is gravity.
+ * input never gates it (spec §5.2) — including through the air, where it is the
+ * only control left, and through a wipeout, where steering the kite back is the
+ * whole of the relaunch beat.
  */
 export function stepRider(rider: RiderState, input: RiderInput, wind: number, dt: number): void {
   stepKite(rider.kite, targetFromInput(input.kiteTarget), wind, dt)
 
-  if (rider.airborne) {
-    rider.vSpeed -= TUNING.GRAVITY * dt
-    rider.altitude += rider.vSpeed * dt
-    if (rider.altitude <= 0) {
-      rider.altitude = 0
-      rider.vSpeed = 0
-      rider.airborne = false
-    }
-  } else {
-    let speed = rider.speed + driveAccel(rider.kite.angle, rider.speed, wind) * dt
-    if (speed < 0) speed = 0
-    else if (speed > TUNING.MAX_SPEED) speed = TUNING.MAX_SPEED
-    rider.speed = speed
-
-    if (input.loading) buildLoad(rider, dt)
-  }
+  if (rider.airborne) stepAir(rider, wind, dt)
+  else stepWater(rider, input, wind, dt)
 
   if (rider.loading && !input.loading) release(rider, wind)
   rider.loading = input.loading
 
+  stepPhase(rider, input, dt)
   rider.x += rider.speed * dt
 }
