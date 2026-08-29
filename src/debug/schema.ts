@@ -46,18 +46,30 @@ export interface TuningGroup {
  */
 export const TUNING_SCHEMA: TuningGroup[] = [
   {
+    title: 'wind',
+    slots: [{ key: 'WIND_BASE', comment: 'kt, tier 1 — the wind every other value scales from' }],
+  },
+  {
     title: 'kite',
     slots: [
       { key: 'BASE_SLEW', comment: 'deg/s at 12kt' },
       { key: 'SLEW_WIND_SCALE' },
       { key: 'OVERSHOOT_DEG' },
       { key: 'OVERSHOOT_SETTLE', comment: 's' },
+      // A sweep length is an arc of the window: 0..90, same as the landing bands.
+      {
+        key: 'OVERSHOOT_MIN_SWEEP',
+        comment: 'deg of travel above which a sweep overshoots',
+        fields: [{ min: 0, max: 90, step: 1 }],
+      },
     ],
   },
   {
     title: 'drive',
     slots: [
       { key: 'DRIVE_K' },
+      { key: 'DRIVE_SHAPE', comment: 'theta multiplier in driveFactor — sets where drive peaks' },
+      { key: 'LIFT_EXP', comment: 'exponent in liftFactor' },
       { key: 'DRAG_K' },
       { key: 'MAX_SPEED', comment: 'm/s at 35kt' },
     ],

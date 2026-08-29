@@ -3,14 +3,20 @@
 // These values are owned by the human. Never edit a value here to make a test
 // pass — if a test and a constant disagree, the test or the formula is wrong.
 export const TUNING = {
+  // wind
+  WIND_BASE: 12,          // kt, tier 1 — the wind every other value scales from
+
   // kite
   BASE_SLEW: 90,          // deg/s at 12kt
   SLEW_WIND_SCALE: 40,
   OVERSHOOT_DEG: 8,
   OVERSHOOT_SETTLE: 0.2,  // s
+  OVERSHOOT_MIN_SWEEP: 60, // deg of travel above which a sweep overshoots
 
   // drive
   DRIVE_K: 12,
+  DRIVE_SHAPE: 0.5,       // theta multiplier in driveFactor — sets where drive peaks
+  LIFT_EXP: 1.5,          // exponent in liftFactor
   DRAG_K: 0.04,
   MAX_SPEED: 22,          // m/s at 35kt
 

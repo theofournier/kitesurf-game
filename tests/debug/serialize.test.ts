@@ -44,6 +44,7 @@ describe('serializeTuning', () => {
     const headings = dump.match(/^ {2}\/\/ \w+$/gm)!.map((line) => line.trim())
 
     expect(headings).toEqual([
+      '// wind',
       '// kite',
       '// drive',
       '// load',
