@@ -6,6 +6,7 @@ import {
   createKiteState,
   driveFactor,
   liftFactor,
+  lineTension,
   slewRate,
   stepKite,
   targetFromInput,
@@ -292,5 +293,49 @@ describe('liftFactor', () => {
 
   it('never goes negative outside the window', () => {
     expect(liftFactor(120)).toBe(0)
+  })
+})
+
+describe('lineTension', () => {
+  const RIDING = TUNING.MAX_SPEED * 0.7
+  const KT_12 = 12
+  const KT_35 = 35
+
+  it('is zero at zenith, however fast the rider is going', () => {
+    // The kite is depowered up there — this is what makes the lines draw slack
+    // at zenith and dead straight on an edge (spec §6.3).
+    expect(lineTension(WINDOW_MIN, TUNING.MAX_SPEED, KT_12)).toBeCloseTo(0, 10)
+  })
+
+  it('is far higher edging mid-window than parked at zenith', () => {
+    expect(lineTension(50, RIDING, KT_12)).toBeGreaterThan(
+      lineTension(WINDOW_MIN, RIDING, KT_12) + 0.5,
+    )
+  })
+
+  it('builds with speed at a fixed window position', () => {
+    expect(lineTension(50, RIDING, KT_12)).toBeGreaterThan(lineTension(50, 0, KT_12))
+  })
+
+  it('builds with wind at a fixed window position and speed', () => {
+    expect(lineTension(50, RIDING, KT_35)).toBeGreaterThan(lineTension(50, RIDING, KT_12))
+  })
+
+  it('stays inside 0..1 across the window, every speed and every tier', () => {
+    for (let theta = WINDOW_MIN; theta <= WINDOW_MAX; theta += 1) {
+      for (let speed = 0; speed <= TUNING.MAX_SPEED; speed += 2) {
+        for (const wind of [KT_12, 18, 25, KT_35, 50]) {
+          const tension = lineTension(theta, speed, wind)
+          expect(tension).toBeGreaterThanOrEqual(0)
+          expect(tension).toBeLessThanOrEqual(1)
+        }
+      }
+    }
+  })
+
+  it('reaches full tension somewhere a rider actually rides', () => {
+    // If nothing on the window ever pulled the lines straight, the sag would
+    // be decoration rather than a load readout.
+    expect(lineTension(50, TUNING.MAX_SPEED, KT_35)).toBeCloseTo(1, 10)
   })
 })

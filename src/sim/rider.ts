@@ -18,10 +18,20 @@ export interface RiderState {
   kite: KiteState
   /** Horizontal speed, m/s. Held in 0..MAX_SPEED (spec §3.1). */
   speed: number
+  /**
+   * Distance travelled, metres. Monotonic — the rider never goes backwards —
+   * and it is what wind, scoring and generation are all keyed off (spec §7.1).
+   */
+  x: number
+  /**
+   * Height above water, metres (spec §3.1). Always 0 until the air phase
+   * lands; the camera and the renderer already read it.
+   */
+  altitude: number
 }
 
 export function createRiderState(): RiderState {
-  return { kite: createKiteState(), speed: 0 }
+  return { kite: createKiteState(), speed: 0, x: 0, altitude: 0 }
 }
 
 /** Quadratic drag, m/s² (spec §3.3): `drag(speed) = DRAG_K * speed²`. */
@@ -61,4 +71,6 @@ export function stepRider(rider: RiderState, input: RiderInput, wind: number, dt
   if (speed < 0) speed = 0
   else if (speed > TUNING.MAX_SPEED) speed = TUNING.MAX_SPEED
   rider.speed = speed
+
+  rider.x += speed * dt
 }

@@ -12,6 +12,7 @@ export const TUNING = {
   OVERSHOOT_DEG: 8,
   OVERSHOOT_SETTLE: 0.2,  // s
   OVERSHOOT_MIN_SWEEP: 60, // deg of travel above which a sweep overshoots
+  TENSION_SPEED_MIX: 0.6, // share of line tension that comes from speed, not window position
 
   // drive
   DRIVE_K: 12,
@@ -55,6 +56,18 @@ export const TUNING = {
   LINE_RADIUS: 264,       // px, compressed
   RIDER_H: 48,            // px
   CAM_ALT_FOLLOW: 0.6,
+  CAM_DAMP: 8,            // 1/s, how fast the camera catches its altitude target
+  ANCHOR_X: 0.3,          // rider screen position, fraction of width
+  HORIZON_Y: 0.42,        // fraction of height
+  WATERLINE_Y: 0.72,      // fraction of height, rider at altitude 0
+  KITE_W: 90,             // px, span of the kite quad
+  LINE_SAG: 44,           // px, control-point drop at zero tension
+  LINE_TREMBLE: 3,        // px of tremble per unit of wind above tier 1
+  LINE_TREMBLE_HZ: 13,    // tremble frequency
+  WATER_BAND_M: 4,        // m between water texture streaks
+  PARALLAX_FAR: 0.15,     // scroll rate of the far water band, x rider speed
+  PARALLAX_MID: 0.45,
+  PARALLAX_NEAR: 1.15,
 
   // generation
   REACTION_MIN: 0.55,     // s

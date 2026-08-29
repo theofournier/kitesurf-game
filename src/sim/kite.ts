@@ -22,6 +22,9 @@ const DEG2RAD = Math.PI / 180
  */
 const ANGLE_EPS = 1e-9
 
+/** Degrees between samples when scanning for the drive peak. */
+const PEAK_SCAN_STEP = 0.25
+
 /**
  * Kite state. `angle` and `target` are the two spec §3.1 variables; the rest is
  * the bookkeeping the overshoot needs, kept here so the sim allocates nothing
@@ -119,6 +122,53 @@ export function driveFactor(theta: number): number {
 export function liftFactor(theta: number): number {
   const c = Math.cos(theta * DEG2RAD)
   return c <= 0 ? 0 : c ** TUNING.LIFT_EXP
+}
+
+/**
+ * Peak of `driveFactor` over the window, memoised on DRIVE_SHAPE.
+ *
+ * The peak moves when the shape constant does, and DRIVE_SHAPE is a live debug
+ * slider, so it is found by a coarse scan rather than hard-coded — recomputed
+ * only on the frames where the human has just dragged that slider, and never
+ * allocating.
+ */
+let peakShape = Number.NaN
+let peakValue = 1
+
+function drivePeak(): number {
+  if (TUNING.DRIVE_SHAPE === peakShape) return peakValue
+
+  let best = 0
+  for (let theta = WINDOW_MIN; theta <= WINDOW_MAX; theta += PEAK_SCAN_STEP) {
+    const value = driveFactor(theta)
+    if (value > best) best = value
+  }
+
+  peakShape = TUNING.DRIVE_SHAPE
+  peakValue = best > 0 ? best : 1
+  return peakValue
+}
+
+/**
+ * How hard the lines are loaded, 0..1 — slack to dead straight (spec §6.3).
+ *
+ * Tension is the pull the rider is edging against, so it follows drive rather
+ * than lift: a kite parked at zenith is depowered and the lines go visibly
+ * slack, however much lift it is making. The rest comes from speed, because a
+ * rider going nowhere is not loading anything, and from wind, because at tier 4
+ * the same window position pulls far harder.
+ *
+ * Rendering reads this, but it is a physical quantity of the sim rather than a
+ * drawing detail, and it is what `load` will build against in a later session.
+ */
+export function lineTension(theta: number, speed: number, wind: number): number {
+  const fromWindow = driveFactor(theta) / drivePeak()
+  const speedFrac = speed / TUNING.MAX_SPEED
+  const mix = TUNING.TENSION_SPEED_MIX
+  const tension = fromWindow * windPower(wind) * (1 - mix + mix * speedFrac)
+
+  if (tension < 0) return 0
+  return tension > 1 ? 1 : tension
 }
 
 /**

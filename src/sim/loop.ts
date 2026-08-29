@@ -1,4 +1,7 @@
 // Fixed-timestep accumulator (spec §11.2). Physics is never tied to frame rate.
+import { TUNING } from '../config/tuning.ts'
+import { createRiderState, stepRider, type RiderState } from './rider.ts'
+import { windAt } from './world.ts'
 
 /** Simulation timestep. The sim only ever advances in exactly this increment. */
 export const DT = 1 / 60
@@ -20,6 +23,9 @@ export interface RiderInput {
 export interface SimState {
   tick: number
   time: number
+  rider: RiderState
+  /** Wind at the rider's distance, kt. Derived, never integrated (spec §7.1). */
+  wind: number
 }
 
 /** Leftover frame time between fixed steps, plus the render interpolation alpha. */
@@ -29,7 +35,7 @@ export interface Accumulator {
 }
 
 export function createSimState(): SimState {
-  return { tick: 0, time: 0 }
+  return { tick: 0, time: 0, rider: createRiderState(), wind: TUNING.WIND_BASE }
 }
 
 export function createInput(): RiderInput {
@@ -47,13 +53,12 @@ export function createAccumulator(): Accumulator {
  * a function of (state, input, dt) alone — no clock, no Math.random, no DOM.
  * It mutates `state` in place and returns it rather than allocating, because
  * the update loop must not allocate (spec §11.4).
- *
- * `_input` is unread until the rider physics lands; the parameter is in the
- * signature now so the call sites never have to change.
  */
-export function step(state: SimState, _input: RiderInput, dt: number): SimState {
+export function step(state: SimState, input: RiderInput, dt: number): SimState {
   state.tick += 1
   state.time += dt
+  state.wind = windAt(state.rider.x)
+  stepRider(state.rider, input, state.wind, dt)
   return state
 }
 

@@ -1,12 +1,14 @@
-// Entry point: canvas surface, fixed-step loop, optional debug panel.
-// Wiring only — game logic lands in /src/sim and drawing in /src/render.
+// Entry point: canvas surface, fixed-step loop, input adapter, optional debug
+// panel. Wiring only — game logic lives in /src/sim and drawing in /src/render.
+import { createAnchor, createDesktopInput } from './input/desktop.ts'
 import { advance, createAccumulator, createInput, createSimState } from './sim/loop.ts'
+import { createCamera, updateCamera } from './render/camera.ts'
+import { drawScene } from './render/scene.ts'
+import { captureSnapshot, createSnapshot, createView, interpolateView } from './render/view.ts'
 
 /** Beyond 2x, retina costs fill rate for no visible gain (spec §5.4). */
 const MAX_DPR = 2
 const MS_PER_SECOND = 1000
-/** Placeholder clear colour until the parallax layers land. Matches index.html. */
-const CLEAR_COLOR = '#0b1a24'
 /** Exponential smoothing for the debug fps readout. */
 const FPS_SMOOTHING = 0.1
 
@@ -19,24 +21,27 @@ const state = createSimState()
 const input = createInput()
 const accumulator = createAccumulator()
 
-/** Canvas size in CSS pixels — the coordinate space every draw call works in. */
-let viewWidth = 0
-let viewHeight = 0
-
+const camera = createCamera()
+const view = createView()
 /**
- * Watched in the debug panel. Loop diagnostics for now; sim state joins them as
- * the sim modules land. Pre-allocated, and only written when the panel is up,
- * so the loop stays allocation-free either way.
+ * The two sim snapshots the render interpolates between: `previous` is the
+ * state before the most recent step, `pending` is the one being captured for
+ * the step about to run. They are swapped rather than copied, so a frame still
+ * allocates nothing.
  */
-const readout = { fps: 0, tick: 0, time: 0, steps: 0, alpha: 0 }
+let previous = createSnapshot()
+let pending = createSnapshot()
+
+const anchor = createAnchor()
+const desktop = createDesktopInput(canvas, input, anchor)
 
 function resize(): void {
   const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR)
-  viewWidth = canvas.clientWidth
-  viewHeight = canvas.clientHeight
+  view.width = canvas.clientWidth
+  view.height = canvas.clientHeight
 
-  const width = Math.round(viewWidth * dpr)
-  const height = Math.round(viewHeight * dpr)
+  const width = Math.round(view.width * dpr)
+  const height = Math.round(view.height * dpr)
   if (canvas.width !== width || canvas.height !== height) {
     canvas.width = width
     canvas.height = height
@@ -45,6 +50,10 @@ function resize(): void {
   // Resizing the backing store resets the context, so the transform is
   // re-applied on every resize rather than once at startup.
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+
+  // The rider moved under a pointer that did not: the target angle is measured
+  // from the anchor, so it has to be recomputed from the same pointer position.
+  desktop.refresh()
 }
 
 // devicePixelRatio changes without the CSS size changing when a window moves
@@ -64,13 +73,20 @@ function watchDpr(): void {
 }
 
 /**
- * `_alpha` is the interpolation factor between the last two sim steps — unread
- * until there is something to interpolate, but in the signature now so the
- * call site never has to change (spec §11.2).
+ * Watched in the debug panel: the four values the window is tuned against
+ * (build plan session 3), then the loop diagnostics. Pre-allocated, and only
+ * written when the panel is up, so the loop stays allocation-free either way.
  */
-function render(_alpha: number): void {
-  ctx.fillStyle = CLEAR_COLOR
-  ctx.fillRect(0, 0, viewWidth, viewHeight)
+const readout = {
+  kiteAngle: 0,
+  kiteTarget: 0,
+  speed: 0,
+  wind: 0,
+  fps: 0,
+  tick: 0,
+  time: 0,
+  steps: 0,
+  alpha: 0,
 }
 
 let previousTime = 0
@@ -83,13 +99,34 @@ function frame(now: number): void {
   const frameTime = previousTime === 0 ? 0 : (now - previousTime) / MS_PER_SECOND
   previousTime = now
 
+  captureSnapshot(pending, state)
   const steps = advance(accumulator, state, input, frameTime)
-  render(accumulator.alpha)
+  // On a frame that ran no step there is nothing new to interpolate from, and
+  // `previous` must keep pointing at the step before the current state.
+  if (steps > 0) {
+    const spent = previous
+    previous = pending
+    pending = spent
+  }
+
+  interpolateView(view, previous, state, accumulator.alpha)
+  updateCamera(camera, view.width, view.height, view.x, view.altitude, frameTime)
+
+  // The input maps the pointer to an angle around the point the lines converge
+  // on, which is where the camera has just put it.
+  anchor.x = camera.anchorX
+  anchor.y = camera.harnessY
+
+  drawScene(ctx, camera, view)
 
   if (debugEnabled) {
     if (frameTime > 0) {
       readout.fps += (1 / frameTime - readout.fps) * FPS_SMOOTHING
     }
+    readout.kiteAngle = state.rider.kite.angle
+    readout.kiteTarget = state.rider.kite.target
+    readout.speed = state.rider.speed
+    readout.wind = state.wind
     readout.tick = state.tick
     readout.time = state.time
     readout.steps = steps

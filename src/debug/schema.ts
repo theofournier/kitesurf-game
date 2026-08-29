@@ -62,6 +62,12 @@ export const TUNING_SCHEMA: TuningGroup[] = [
         comment: 'deg of travel above which a sweep overshoots',
         fields: [{ min: 0, max: 90, step: 1 }],
       },
+      // A share of a whole is a 0..1 blend.
+      {
+        key: 'TENSION_SPEED_MIX',
+        comment: 'share of line tension that comes from speed, not window position',
+        fields: [{ min: 0, max: 1 }],
+      },
     ],
   },
   {
@@ -144,6 +150,38 @@ export const TUNING_SCHEMA: TuningGroup[] = [
       { key: 'RIDER_H', comment: 'px', fields: [{ step: 1 }] },
       // A camera follow factor is a 0..1 blend; above 1 it overshoots.
       { key: 'CAM_ALT_FOLLOW', fields: [{ min: 0, max: 1 }] },
+      { key: 'CAM_DAMP', comment: '1/s, how fast the camera catches its altitude target' },
+      // The three screen-fraction values are 0..1 by construction: a fraction
+      // of the viewport, not a length that can be scaled.
+      {
+        key: 'ANCHOR_X',
+        comment: 'rider screen position, fraction of width',
+        fields: [{ min: 0, max: 1 }],
+      },
+      { key: 'HORIZON_Y', comment: 'fraction of height', fields: [{ min: 0, max: 1 }] },
+      {
+        key: 'WATERLINE_Y',
+        comment: 'fraction of height, rider at altitude 0',
+        fields: [{ min: 0, max: 1 }],
+      },
+      { key: 'KITE_W', comment: 'px, span of the kite quad', fields: [{ step: 1 }] },
+      { key: 'LINE_SAG', comment: 'px, control-point drop at zero tension', fields: [{ step: 1 }] },
+      // Tremble starts at nothing: tier 1 lines are meant to be still.
+      {
+        key: 'LINE_TREMBLE',
+        comment: 'px of tremble per unit of wind above tier 1',
+        fields: [{ min: 0 }],
+      },
+      { key: 'LINE_TREMBLE_HZ', comment: 'tremble frequency' },
+      { key: 'WATER_BAND_M', comment: 'm between water texture streaks' },
+      // Parallax factors are multiples of rider speed; 1 is the rider's own plane.
+      {
+        key: 'PARALLAX_FAR',
+        comment: 'scroll rate of the far water band, x rider speed',
+        fields: [{ min: 0, max: 2 }],
+      },
+      { key: 'PARALLAX_MID', fields: [{ min: 0, max: 2 }] },
+      { key: 'PARALLAX_NEAR', fields: [{ min: 0, max: 2 }] },
     ],
   },
   {

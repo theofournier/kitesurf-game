@@ -155,3 +155,34 @@ describe('terminalSpeed', () => {
     }
   })
 })
+
+describe('distance', () => {
+  it('integrates speed, so distance is what the run is measured in', () => {
+    const rider = parkedAt(50)
+    rider.speed = 10
+
+    const input = inputAt(50)
+    for (let i = 0; i < 60; i++) stepRider(rider, input, KT_12, DT)
+
+    // Speed is still accelerating toward terminal, so the distance covered is
+    // at least a second at the speed it started with.
+    expect(rider.x).toBeGreaterThan(10)
+    expect(rider.x).toBeLessThan(rider.speed)
+  })
+
+  it('never runs backwards, whatever the kite is doing', () => {
+    const rider = createRiderState()
+    const input = inputAt(0)
+
+    let last = 0
+    for (let i = 0; i < 600; i++) {
+      stepRider(rider, input, KT_12, DT)
+      expect(rider.x).toBeGreaterThanOrEqual(last)
+      last = rider.x
+    }
+  })
+
+  it('starts on the water', () => {
+    expect(createRiderState().altitude).toBe(0)
+  })
+})
