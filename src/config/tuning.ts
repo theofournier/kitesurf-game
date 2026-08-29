@@ -24,6 +24,7 @@ export const TUNING = {
   // load
   LOAD_RATE: 1.4,         // per second at max speed
   STALL_GRACE: 0.4,       // s
+  STALL_SPEED_LOSS: 0.4,  // share of speed the edge catch takes away
 
   // pop
   POP_K: 9.5,

@@ -85,6 +85,12 @@ export const TUNING_SCHEMA: TuningGroup[] = [
     slots: [
       { key: 'LOAD_RATE', comment: 'per second at max speed' },
       { key: 'STALL_GRACE', comment: 's' },
+      // A share of the speed the rider had is a 0..1 fraction.
+      {
+        key: 'STALL_SPEED_LOSS',
+        comment: 'share of speed the edge catch takes away',
+        fields: [{ min: 0, max: 1 }],
+      },
     ],
   },
   {

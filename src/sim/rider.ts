@@ -1,18 +1,30 @@
-// Rider physics (spec §3.3). The state machine — load, pop, air, landing —
-// lands here in later sessions; this session is the kite and the speed it
-// drives.
+// Rider physics (spec §3.3, §3.4, §3.5). Drive, the load the player builds
+// against it, and the pop that spends it.
+//
+// The air phase is deliberately thin here: gravity carries the pop to its apex
+// and back down, because a pop with nowhere to go cannot be tuned or tested.
+// Float (§3.6) and the landing table (§3.7) are the next session's work.
 //
 // Pure: mutates a preallocated RiderState in place, allocates nothing per step.
 import { TUNING } from '../config/tuning.ts'
 import {
   createKiteState,
   driveFactor,
+  liftFactor,
   stepKite,
   targetFromInput,
   windPower,
   type KiteState,
 } from './kite.ts'
 import type { RiderInput } from './loop.ts'
+
+/**
+ * Float dust on the overload timer. STALL_GRACE is 24 steps of DT exactly, and
+ * 24 additions of 1/60 do not land on 0.4 — this keeps "more than STALL_GRACE"
+ * from firing a step early on rounding alone. Not a gameplay value, so not a
+ * TUNING one — same reasoning as ANGLE_EPS in kite.ts.
+ */
+const OVERLOAD_EPS = 1e-9
 
 export interface RiderState {
   kite: KiteState
@@ -23,15 +35,41 @@ export interface RiderState {
    * and it is what wind, scoring and generation are all keyed off (spec §7.1).
    */
   x: number
-  /**
-   * Height above water, metres (spec §3.1). Always 0 until the air phase
-   * lands; the camera and the renderer already read it.
-   */
+  /** Height above water, metres (spec §3.1). 0 whenever on the water. */
   altitude: number
+  /** Vertical velocity, m/s (spec §3.1). Set by the pop, spent by gravity. */
+  vSpeed: number
+  /** Stored edge tension, 0..1 (spec §3.4). Builds while held, spent on pop. */
+  load: number
+  /** Seconds held past a full load. Past STALL_GRACE the edge catches. */
+  overload: number
+  /** True between the pop and touchdown. */
+  airborne: boolean
+  /**
+   * True from a stall until the input is released: the pop that hold was
+   * building is gone, and holding on cannot win it back (spec §3.4).
+   */
+  popForfeit: boolean
+  /** Whether the load input was held last step, so a release is an edge. */
+  loading: boolean
+  /** Impulse of the most recent pop, m/s. Read by debug and feedback only. */
+  lastPop: number
 }
 
 export function createRiderState(): RiderState {
-  return { kite: createKiteState(), speed: 0, x: 0, altitude: 0 }
+  return {
+    kite: createKiteState(),
+    speed: 0,
+    x: 0,
+    altitude: 0,
+    vSpeed: 0,
+    load: 0,
+    overload: 0,
+    airborne: false,
+    popForfeit: false,
+    loading: false,
+    lastPop: 0,
+  }
 }
 
 /** Quadratic drag, m/s² (spec §3.3): `drag(speed) = DRAG_K * speed²`. */
@@ -61,16 +99,128 @@ export function terminalSpeed(theta: number, wind: number): number {
 }
 
 /**
- * Advance the rider one fixed step: slew the kite toward where the player is
- * pointing, then integrate speed against drag at the angle that produced.
+ * Load gained per second at `speed`, 1/s (spec §3.4):
+ *
+ *     load += LOAD_RATE * (speed / MAX_SPEED) * dt
+ *
+ * Zero at a standstill and full only at full speed, which is what ties the pop
+ * to the kite being low: you cannot build an edge you are not riding against.
+ */
+export function loadRate(speed: number): number {
+  return TUNING.LOAD_RATE * (speed / TUNING.MAX_SPEED)
+}
+
+/** Ballistic apex of a pop of `impulse` m/s, metres: `v² / 2g`. */
+export function peakHeight(impulse: number): number {
+  return (impulse * impulse) / (2 * TUNING.GRAVITY)
+}
+
+/** The impulse that reaches an apex of `height` metres — inverse of the above. */
+export function impulseForHeight(height: number): number {
+  return Math.sqrt(2 * TUNING.GRAVITY * height)
+}
+
+/**
+ * The flat-water ceiling (spec §3.5, §4.4), applied to an uncapped impulse.
+ *
+ * A hard clamp would make every good pop identical to every perfect one, so the
+ * ceiling is asymptotic instead: apex `h` becomes `CAP * h / (h + CAP)`, which
+ * is strictly increasing, always below FLAT_POP_CAP, and barely touches a pop
+ * that was never near the cap. It lands the flat-water numbers spec §4.4 asks
+ * for — ~2.4m at 12kt and ~4.4m at 35kt against a 5m ceiling — with better
+ * execution still reading as more height right up to the top.
+ */
+export function capFlatImpulse(impulse: number): number {
+  const cap = TUNING.FLAT_POP_CAP
+  if (cap <= 0) return 0
+  return impulse * Math.sqrt(cap / (peakHeight(impulse) + cap))
+}
+
+/**
+ * Vertical impulse on release, m/s (spec §3.5):
+ *
+ *     popImpulse = load * liftFactor(θ_release) * POP_K * windPower * kickerBonus
+ *
+ * The two terms fight: load needs speed and so needs the kite low, lift needs
+ * the kite at zenith. The flat-water ceiling is applied before the kicker
+ * bonus, because it is flat water that is capped — a wave is how you beat it.
+ */
+export function popImpulse(load: number, theta: number, wind: number, kickerBonus = 1): number {
+  const flat = load * liftFactor(theta) * TUNING.POP_K * windPower(wind)
+  return capFlatImpulse(flat) * kickerBonus
+}
+
+/**
+ * The edge catches (spec §3.4): speed drops by STALL_SPEED_LOSS, the load is
+ * gone, and so is the pop it was building. Without this the optimal play is to
+ * hold maximum at all times.
+ */
+function stall(rider: RiderState): void {
+  rider.speed *= 1 - TUNING.STALL_SPEED_LOSS
+  rider.load = 0
+  rider.overload = 0
+  rider.popForfeit = true
+}
+
+/** Builds load for one step while the input is held on the water (spec §3.4). */
+function buildLoad(rider: RiderState, dt: number): void {
+  if (rider.load < 1) {
+    const load = rider.load + loadRate(rider.speed) * dt
+    rider.load = load > 1 ? 1 : load
+    return
+  }
+
+  // Already full: the grace timer is what the player is spending now.
+  rider.overload += dt
+  if (rider.overload > TUNING.STALL_GRACE + OVERLOAD_EPS) stall(rider)
+}
+
+/** Spends the load on the release edge (spec §3.5). */
+function release(rider: RiderState, wind: number): void {
+  const forfeit = rider.popForfeit || rider.airborne
+  const impulse = forfeit ? 0 : popImpulse(rider.load, rider.kite.angle, wind)
+
+  if (impulse > 0) {
+    rider.vSpeed = impulse
+    rider.airborne = true
+  }
+
+  rider.lastPop = impulse
+  rider.load = 0
+  rider.overload = 0
+  rider.popForfeit = false
+}
+
+/**
+ * Advance the rider one fixed step.
+ *
+ * The kite slews first and always: steering is live every frame and the load
+ * input never gates it (spec §5.2). Then the rider either drives and loads on
+ * the water, or coasts through the air — spec §3.6 gives the air no drive at
+ * any kite angle, so the only thing acting on a jump is gravity.
  */
 export function stepRider(rider: RiderState, input: RiderInput, wind: number, dt: number): void {
   stepKite(rider.kite, targetFromInput(input.kiteTarget), wind, dt)
 
-  let speed = rider.speed + driveAccel(rider.kite.angle, rider.speed, wind) * dt
-  if (speed < 0) speed = 0
-  else if (speed > TUNING.MAX_SPEED) speed = TUNING.MAX_SPEED
-  rider.speed = speed
+  if (rider.airborne) {
+    rider.vSpeed -= TUNING.GRAVITY * dt
+    rider.altitude += rider.vSpeed * dt
+    if (rider.altitude <= 0) {
+      rider.altitude = 0
+      rider.vSpeed = 0
+      rider.airborne = false
+    }
+  } else {
+    let speed = rider.speed + driveAccel(rider.kite.angle, rider.speed, wind) * dt
+    if (speed < 0) speed = 0
+    else if (speed > TUNING.MAX_SPEED) speed = TUNING.MAX_SPEED
+    rider.speed = speed
 
-  rider.x += speed * dt
+    if (input.loading) buildLoad(rider, dt)
+  }
+
+  if (rider.loading && !input.loading) release(rider, wind)
+  rider.loading = input.loading
+
+  rider.x += rider.speed * dt
 }

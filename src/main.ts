@@ -73,15 +73,19 @@ function watchDpr(): void {
 }
 
 /**
- * Watched in the debug panel: the four values the window is tuned against
- * (build plan session 3), then the loop diagnostics. Pre-allocated, and only
- * written when the panel is up, so the loop stays allocation-free either way.
+ * Watched in the debug panel: the values the window is tuned against (build
+ * plan session 3), what the load and pop are doing (session 4), then the loop
+ * diagnostics. Pre-allocated, and only written when the panel is up, so the
+ * loop stays allocation-free either way.
  */
 const readout = {
   kiteAngle: 0,
   kiteTarget: 0,
   speed: 0,
   wind: 0,
+  load: 0,
+  altitude: 0,
+  lastPop: 0,
   fps: 0,
   tick: 0,
   time: 0,
@@ -127,6 +131,9 @@ function frame(now: number): void {
     readout.kiteTarget = state.rider.kite.target
     readout.speed = state.rider.speed
     readout.wind = state.wind
+    readout.load = state.rider.load
+    readout.altitude = state.rider.altitude
+    readout.lastPop = state.rider.lastPop
     readout.tick = state.tick
     readout.time = state.time
     readout.steps = steps
