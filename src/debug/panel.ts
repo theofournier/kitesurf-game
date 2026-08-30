@@ -20,6 +20,22 @@ const READOUT_DECIMALS = 2
 /** Whatever the loop wants to watch. The panel monitors each key it finds. */
 export type Readout = Record<string, number | string>
 
+/**
+ * A live knob that is not a TUNING constant — a debug-only override the loop
+ * owns, bound straight into the state object that holds it. These deliberately
+ * stay out of TUNING and so out of the copy-values dump: they are things to
+ * fly the game at, not values to ship.
+ */
+export interface Control {
+  /** The object holding the value. The named key must be a number. */
+  target: object
+  key: string
+  label?: string
+  min?: number
+  max?: number
+  step?: number
+}
+
 export interface DebugPanel {
   dispose(): void
 }
@@ -66,7 +82,7 @@ async function copyText(text: string): Promise<boolean> {
  * Builds the panel. Call once, after `readout` has every key the loop will
  * write — the monitors are created from the keys present at this moment.
  */
-export function createDebugPanel(readout: Readout = {}): DebugPanel {
+export function createDebugPanel(readout: Readout = {}, controls: Control[] = []): DebugPanel {
   const container = document.createElement('div')
   container.id = CONTAINER_ID
   container.style.position = 'fixed'
@@ -106,6 +122,20 @@ export function createDebugPanel(readout: Readout = {}): DebugPanel {
       readoutFolder.addBinding(readout, key, { readonly: true, format: formatReadout })
     } else {
       readoutFolder.addBinding(readout, key, { readonly: true })
+    }
+  }
+
+  // Overrides sit next to the readout rather than down among the constants:
+  // they change what the sim is doing, not how it is tuned.
+  if (controls.length > 0) {
+    const folder = pane.addFolder({ title: 'overrides', expanded: true })
+    for (const control of controls) {
+      folder.addBinding(control.target as Record<string, number>, control.key, {
+        label: control.label,
+        min: control.min,
+        max: control.max,
+        step: control.step,
+      })
     }
   }
 

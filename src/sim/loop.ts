@@ -1,7 +1,7 @@
 // Fixed-timestep accumulator (spec §11.2). Physics is never tied to frame rate.
 import { TUNING } from '../config/tuning.ts'
 import { createRiderState, stepRider, type RiderState } from './rider.ts'
-import { windAt } from './world.ts'
+import { WIND_AUTO, windAt } from './world.ts'
 
 /** Simulation timestep. The sim only ever advances in exactly this increment. */
 export const DT = 1 / 60
@@ -26,6 +26,12 @@ export interface SimState {
   rider: RiderState
   /** Wind at the rider's distance, kt. Derived, never integrated (spec §7.1). */
   wind: number
+  /**
+   * Debug: forces `wind` to a fixed kt, ignoring distance. WIND_AUTO leaves the
+   * curve alone, and that is what every run starts on — a recorded run replays
+   * the wind it was ridden at because the override travels with the state.
+   */
+  windOverride: number
 }
 
 /** Leftover frame time between fixed steps, plus the render interpolation alpha. */
@@ -35,7 +41,13 @@ export interface Accumulator {
 }
 
 export function createSimState(): SimState {
-  return { tick: 0, time: 0, rider: createRiderState(), wind: TUNING.WIND_BASE }
+  return {
+    tick: 0,
+    time: 0,
+    rider: createRiderState(),
+    wind: TUNING.WIND_BASE,
+    windOverride: WIND_AUTO,
+  }
 }
 
 export function createInput(): RiderInput {
@@ -57,7 +69,7 @@ export function createAccumulator(): Accumulator {
 export function step(state: SimState, input: RiderInput, dt: number): SimState {
   state.tick += 1
   state.time += dt
-  state.wind = windAt(state.rider.x)
+  state.wind = windAt(state.rider.x, state.windOverride)
   stepRider(state.rider, input, state.wind, dt)
   return state
 }

@@ -3,6 +3,7 @@
 import { createAnchor, createDesktopInput } from './input/desktop.ts'
 import { advance, createAccumulator, createInput, createSimState } from './sim/loop.ts'
 import { PHASE } from './sim/rider.ts'
+import { WIND_AUTO } from './sim/world.ts'
 import { createCamera, updateCamera } from './render/camera.ts'
 import { createEffects, updateEffects } from './render/effects.ts'
 import { drawScene } from './render/scene.ts'
@@ -13,6 +14,14 @@ const MAX_DPR = 2
 const MS_PER_SECOND = 1000
 /** Exponential smoothing for the debug fps readout. */
 const FPS_SMOOTHING = 0.1
+/**
+ * Range of the debug wind override, kt. Spans the spec §7.1 tier table with
+ * room above tier 4, and bottoms out at WIND_AUTO — the off position, where
+ * the wind comes from the curve. A debug-tool bound, not a gameplay value, so
+ * it lives here rather than in TUNING.
+ */
+const WIND_SLIDER_MAX = 40
+const WIND_SLIDER_STEP = 0.5
 
 const debugEnabled = new URLSearchParams(window.location.search).get('debug') === '1'
 
@@ -166,5 +175,16 @@ requestAnimationFrame(frame)
 
 if (debugEnabled) {
   // Dynamic so Tweakpane lands in its own chunk and never ships to players.
-  void import('./debug/panel.ts').then((panel) => panel.createDebugPanel(readout))
+  void import('./debug/panel.ts').then((panel) =>
+    panel.createDebugPanel(readout, [
+      {
+        target: state,
+        key: 'windOverride',
+        label: `wind kt (${WIND_AUTO} = curve)`,
+        min: WIND_AUTO,
+        max: WIND_SLIDER_MAX,
+        step: WIND_SLIDER_STEP,
+      },
+    ]),
+  )
 }
