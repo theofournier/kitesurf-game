@@ -39,6 +39,10 @@ export const TUNING = {
   BONUS_CHOP: 1.15,
   BONUS_WAVE: 1.60,
   BONUS_WAKE: 2.40,
+  RAMP_CHOP: 0.3,         // m of ramp height (spec §4.1)
+  RAMP_WAVE: 1.0,
+  RAMP_WAKE: 1.8,
+  WAVE_FACE_K: 5,         // m of face per sqrt(m) of ramp height — the slope the face launches off
 
   // landing
   CLEAN_BAND: [35, 75],   // deg
@@ -91,4 +95,9 @@ export const TUNING = {
 
   // generation
   REACTION_MIN: 0.55,     // s
+  WAVE_GAP_MIN: 55,       // m between one lip and the next
+  WAVE_GAP_MAX: 140,
+  WAVE_MIX_CHOP: 0.55,    // share of waves that are chop
+  WAVE_MIX_WAVE: 0.35,    // share that are waves — boat wakes take the rest
+  WAVE_LEAD: 2.5,         // s of warning a wave gets before its lip
 }

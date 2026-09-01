@@ -6,6 +6,10 @@
 import { lineTension } from '../sim/kite.ts'
 import type { SimState } from '../sim/loop.ts'
 import { PHASE, type Phase } from '../sim/rider.ts'
+import type { Wave } from '../sim/world.ts'
+
+/** What a view holds before the first frame: no world, so no waves. */
+const NO_WAVES: readonly Wave[] = []
 
 /** The sim values worth interpolating: everything that moves on screen. */
 export interface Snapshot {
@@ -38,6 +42,15 @@ export interface RenderView extends Snapshot {
    * fall inside the same beat.
    */
   landings: number
+  /**
+   * The world's wave pool, by reference (spec §4).
+   *
+   * Not interpolated and not copied: a wave does not move, so the only thing
+   * animating it is the camera, and copying the pool every frame would be an
+   * allocation on the render path for no motion at all. The renderer treats it
+   * as read-only, which is the same contract every other field here has.
+   */
+  waves: readonly Wave[]
 }
 
 export function createSnapshot(): Snapshot {
@@ -61,6 +74,7 @@ export function createView(): RenderView {
     apex: 0,
     landingQuality: 0,
     landings: 0,
+    waves: NO_WAVES,
   }
 }
 
@@ -107,5 +121,6 @@ export function interpolateView(
   view.apex = state.rider.apex
   view.landingQuality = state.rider.landingQuality
   view.landings = state.rider.landings
+  view.waves = state.world.waves
   view.tension = lineTension(view.kiteAngle, view.speed, view.wind)
 }

@@ -17,6 +17,7 @@ import {
   type KiteState,
 } from './kite.ts'
 import type { RiderInput } from './loop.ts'
+import { NO_KICKER, type Kicker } from './world.ts'
 
 /**
  * Float dust on the overload timer. STALL_GRACE is 24 steps of DT exactly, and
@@ -74,6 +75,13 @@ export interface RiderState {
   loading: boolean
   /** Impulse of the most recent pop, m/s. Read by debug and feedback only. */
   lastPop: number
+  /** Kicker bonus that pop was taken with, 1 on flat water (spec §4.2). */
+  lastKicker: number
+  /**
+   * How far off the lip that pop was, s — negative early, positive late. The
+   * one number that answers "why did I miss?", so the debug panel gets it.
+   */
+  lastLip: number
   /** Which of the five phases the rider is in (spec §3.7). */
   phase: Phase
   /** Seconds left of a LANDING or WIPEOUT beat. 0 in every other phase. */
@@ -107,6 +115,8 @@ export function createRiderState(): RiderState {
     popForfeit: false,
     loading: false,
     lastPop: 0,
+    lastKicker: 1,
+    lastLip: 0,
     phase: PHASE.RIDING,
     recover: 0,
     apex: 0,
@@ -368,16 +378,32 @@ function buildLoad(rider: RiderState, dt: number): void {
   if (rider.overload > TUNING.STALL_GRACE + OVERLOAD_EPS) stall(rider)
 }
 
-/** Spends the load on the release edge (spec §3.5). */
-function release(rider: RiderState, wind: number): void {
+/**
+ * Spends the load on the release edge (spec §3.5), off whatever water is under
+ * the board (spec §4.2).
+ *
+ * The kicker arrives as a struct rather than as a wave, so the rider still
+ * knows nothing about the world it is riding through: the bonus multiplies the
+ * pop inside `popImpulse`, where the flat-water ceiling is applied before it,
+ * and the face's own ramp velocity is added on top of the finished impulse
+ * because it is water under the board rather than anything the kite did.
+ *
+ * The ramp only ever adds to a pop, it never makes one: a release with nothing
+ * stored is not a takeoff, and hitting a wake with no load should leave the
+ * rider on the water rather than hand them a free hop.
+ */
+function release(rider: RiderState, wind: number, kicker: Kicker): void {
   const forfeit = rider.popForfeit || rider.airborne
-  const impulse = forfeit ? 0 : popImpulse(rider.load, rider.kite.angle, wind)
+  const bonus = forfeit ? 1 : kicker.bonus
+  const impulse = forfeit ? 0 : popImpulse(rider.load, rider.kite.angle, wind, bonus)
 
   if (impulse > 0) {
-    rider.vSpeed = impulse
+    rider.vSpeed = impulse + kicker.ramp
     rider.airborne = true
     rider.apex = 0
     rider.airTime = 0
+    rider.lastKicker = bonus
+    rider.lastLip = kicker.delta
   }
 
   rider.lastPop = impulse
@@ -487,14 +513,24 @@ function stepPhase(rider: RiderState, input: RiderInput, dt: number): void {
  * input never gates it (spec §5.2) — including through the air, where it is the
  * only control left, and through a wipeout, where steering the kite back is the
  * whole of the relaunch beat.
+ *
+ * `kicker` is what the water under the board is worth this step (spec §4.2).
+ * It defaults to flat water, so every caller that has no world — every physics
+ * test, and the sim before waves existed — reads exactly as it did.
  */
-export function stepRider(rider: RiderState, input: RiderInput, wind: number, dt: number): void {
+export function stepRider(
+  rider: RiderState,
+  input: RiderInput,
+  wind: number,
+  dt: number,
+  kicker: Kicker = NO_KICKER,
+): void {
   stepKite(rider.kite, targetFromInput(input.kiteTarget), wind, dt)
 
   if (rider.airborne) stepAir(rider, wind, dt)
   else stepWater(rider, input, wind, dt)
 
-  if (rider.loading && !input.loading) release(rider, wind)
+  if (rider.loading && !input.loading) release(rider, wind, kicker)
   rider.loading = input.loading
 
   stepPhase(rider, input, dt)

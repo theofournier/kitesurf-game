@@ -1,7 +1,16 @@
 // Fixed-timestep accumulator (spec §11.2). Physics is never tied to frame rate.
 import { TUNING } from '../config/tuning.ts'
 import { createRiderState, stepRider, type RiderState } from './rider.ts'
-import { WIND_AUTO, windAt } from './world.ts'
+import {
+  createKicker,
+  createWorldState,
+  kickerAt,
+  stepWorld,
+  WIND_AUTO,
+  windAt,
+  type Kicker,
+  type WorldState,
+} from './world.ts'
 
 /** Simulation timestep. The sim only ever advances in exactly this increment. */
 export const DT = 1 / 60
@@ -12,6 +21,13 @@ export const DT = 1 / 60
  * gameplay value, which is why it does not live in TUNING.
  */
 export const MAX_FRAME_TIME = 0.25
+
+/**
+ * The seed every run starts on until the run structure owns one (spec §10).
+ * Fixed rather than clock-derived because the sim may not read a clock, and
+ * because a repeatable stream of waves is what a tuning session needs.
+ */
+export const DEFAULT_SEED = 0x5eed
 
 /** The one input struct every platform adapter produces (spec §5.1). */
 export interface RiderInput {
@@ -24,6 +40,13 @@ export interface SimState {
   tick: number
   time: number
   rider: RiderState
+  /** Waves, obstacles and the seeded stream that lays them down (spec §9.2). */
+  world: WorldState
+  /**
+   * What the water under the board is worth to a pop this step (spec §4.2).
+   * Recomputed every step into the same struct, so the loop allocates nothing.
+   */
+  kicker: Kicker
   /** Wind at the rider's distance, kt. Derived, never integrated (spec §7.1). */
   wind: number
   /**
@@ -40,11 +63,13 @@ export interface Accumulator {
   alpha: number
 }
 
-export function createSimState(): SimState {
+export function createSimState(seed: number = DEFAULT_SEED): SimState {
   return {
     tick: 0,
     time: 0,
     rider: createRiderState(),
+    world: createWorldState(seed),
+    kicker: createKicker(),
     wind: TUNING.WIND_BASE,
     windOverride: WIND_AUTO,
   }
@@ -70,7 +95,15 @@ export function step(state: SimState, input: RiderInput, dt: number): SimState {
   state.tick += 1
   state.time += dt
   state.wind = windAt(state.rider.x, state.windOverride)
-  stepRider(state.rider, input, state.wind, dt)
+
+  // The kicker is read at the top of the step, from the position and speed the
+  // rider arrived with, and the release inside stepRider spends it. That leaves
+  // the lip timing at most one step stale against a 300ms window — a twentieth
+  // of it — and keeps the rider from having to know what a wave is.
+  stepWorld(state.world, state.rider.x)
+  kickerAt(state.kicker, state.world, state.rider.x, state.rider.speed)
+
+  stepRider(state.rider, input, state.wind, dt, state.kicker)
   return state
 }
 

@@ -21,6 +21,14 @@ export const PALETTE = {
   line: 'rgba(226, 234, 238, 0.85)',
   arc: 'rgba(200, 220, 235, 0.16)',
   ghost: 'rgba(220, 235, 245, 0.35)',
+  // Waves (spec §4). The face is a lit slab of water, the lip is the one thing
+  // on it that has to be unmistakable from a second out, and a boat wake says
+  // so in its own colour because it is the one worth changing line for.
+  waveFace: '#2b4657',
+  waveFaceWake: '#365a6e',
+  waveFoam: 'rgba(226, 244, 250, 0.92)',
+  waveFoamWake: 'rgba(159, 242, 255, 0.96)',
+  waveGuide: 'rgba(196, 230, 246, 0.20)',
   /** Altitude shadow on the water, under the rider. */
   shadow: 'rgba(8, 18, 26, 0.45)',
   // The three landing verdicts (spec §3.7). Green, amber and red, because the

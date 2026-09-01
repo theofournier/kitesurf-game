@@ -87,10 +87,15 @@ function watchDpr(): void {
 /**
  * Watched in the debug panel: the values the window is tuned against (build
  * plan session 3), what the load and pop are doing (session 4), the air and the
- * landing verdict (session 5), then the loop diagnostics. Pre-allocated, and
+ * landing verdict (session 5), the kicker the last pop came off and how far from
+ * the lip it went (session 6), then the loop diagnostics. Pre-allocated, and
  * only written when the panel is up, so the loop stays allocation-free either
  * way — `state` is seeded with a phase name so the panel builds a string
  * monitor for it rather than a numeric one.
+ *
+ * `lipDelta` is the miss on the last pop and `lipAhead` the one being set up
+ * right now, both in seconds: negative early, positive late. Between them they
+ * answer the question the build plan's turn 3 asks the telegraph to answer.
  */
 const readout = {
   kiteAngle: 0,
@@ -106,6 +111,9 @@ const readout = {
   descent: 0,
   quality: 0,
   lastPop: 0,
+  kicker: 1,
+  lipDelta: 0,
+  lipAhead: 0,
   fps: 0,
   tick: 0,
   time: 0,
@@ -161,6 +169,9 @@ function frame(now: number): void {
     readout.descent = state.rider.descentRate
     readout.quality = state.rider.landingQuality
     readout.lastPop = state.rider.lastPop
+    readout.kicker = state.rider.lastKicker
+    readout.lipDelta = state.rider.lastLip
+    readout.lipAhead = state.kicker.delta
     readout.tick = state.tick
     readout.time = state.time
     readout.steps = steps

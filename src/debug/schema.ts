@@ -121,6 +121,18 @@ export const TUNING_SCHEMA: TuningGroup[] = [
       { key: 'BONUS_CHOP', fields: [{ min: 1 }] },
       { key: 'BONUS_WAVE', fields: [{ min: 1 }] },
       { key: 'BONUS_WAKE', fields: [{ min: 1 }] },
+      // Ramp heights are the spec §4.1 table. A wave with no height is not a
+      // wave, so they stop just above zero rather than at it.
+      { key: 'RAMP_CHOP', comment: 'm of ramp height (spec §4.1)', fields: [{ min: 0.05 }] },
+      { key: 'RAMP_WAVE', fields: [{ min: 0.05 }] },
+      { key: 'RAMP_WAKE', fields: [{ min: 0.05 }] },
+      {
+        key: 'WAVE_FACE_K',
+        comment: 'm of face per sqrt(m) of ramp height — the slope the face launches off',
+        // A face shorter than a board is a wall, not a ramp: the slope this
+        // gives is what the ramp velocity comes off, so it cannot go to zero.
+        fields: [{ min: 1 }],
+      },
     ],
   },
   {
@@ -252,7 +264,30 @@ export const TUNING_SCHEMA: TuningGroup[] = [
   },
   {
     title: 'generation',
-    slots: [{ key: 'REACTION_MIN', comment: 's' }],
+    slots: [
+      { key: 'REACTION_MIN', comment: 's' },
+      { key: 'WAVE_GAP_MIN', comment: 'm between one lip and the next' },
+      { key: 'WAVE_GAP_MAX' },
+      // The two shares are a split of the same 1.0: whatever they leave is the
+      // share of boat wakes.
+      {
+        key: 'WAVE_MIX_CHOP',
+        comment: 'share of waves that are chop',
+        fields: [{ min: 0, max: 1 }],
+      },
+      {
+        key: 'WAVE_MIX_WAVE',
+        comment: 'share that are waves — boat wakes take the rest',
+        fields: [{ min: 0, max: 1 }],
+      },
+      // The build plan's floor: a wave is on screen at least 1.5s before its
+      // lip, at any speed. The slider cannot be dragged under the guarantee.
+      {
+        key: 'WAVE_LEAD',
+        comment: 's of warning a wave gets before its lip',
+        fields: [{ min: 1.5 }],
+      },
+    ],
   },
 ]
 

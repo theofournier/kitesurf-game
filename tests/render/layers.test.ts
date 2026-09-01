@@ -94,10 +94,13 @@ describe('drawWater', () => {
       for (const row of rows(water(riderX).rects).values()) {
         // The streaks are a repeating pattern, so what matters is that it runs
         // off both edges: no phase may leave a gap wider than its own spacing
-        // where the frame ends.
+        // where the frame ends. The row is drawn while `x < width`, so the last
+        // streak starts within one spacing of the right edge — and lands on it
+        // exactly when the phase is zero, which is a covered frame and not a
+        // bare one.
         const xs = row.map((r) => r.x)
         expect(Math.min(...xs)).toBeLessThanOrEqual(0)
-        expect(Math.max(...xs)).toBeGreaterThan(W - spacing)
+        expect(Math.max(...xs)).toBeGreaterThanOrEqual(W - spacing)
       }
     }
   })
