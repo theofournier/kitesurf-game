@@ -66,7 +66,7 @@ export const TUNING = {
   RIDER_H: 48,            // px
   CAM_ALT_FOLLOW: 0.6,
   CAM_DAMP: 8,            // 1/s, how fast the camera catches its altitude target
-  ANCHOR_X: 0.3,          // rider screen position, fraction of width
+  ANCHOR_X: 0.2,          // rider screen position, fraction of width
   HORIZON_Y: 0.42,        // fraction of height
   WATERLINE_Y: 0.72,      // fraction of height, rider at altitude 0
   KITE_W: 90,             // px, span of the kite quad
