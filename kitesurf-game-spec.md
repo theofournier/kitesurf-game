@@ -75,6 +75,14 @@ load += LOAD_RATE * (speed / MAX_SPEED) * dt
 
 Load only builds meaningfully at speed, which requires the kite low. Load is capped at 1.0.
 
+**Carving costs speed while it happens.** The edge that builds the load is also extra drag on the board, proportional to how hard it is loaded:
+
+```
+drag += CARVE_DRAG_K * load * speed²          // while the input is held
+```
+
+`CARVE_DRAG_K` sits at `DRAG_K`, so a full edge doubles the drag term and a light one barely registers. This is the continuous counter-pressure on the load, ahead of the stall's cliff: holding for a bigger pop means popping off a slower board, and a slower board loads slower still, because the rate above scales with speed. The hold gets more expensive the longer it runs rather than being free right up to `STALL_GRACE`.
+
 **Over-load penalty:** holding past 1.0 for more than `STALL_GRACE` (0.4s) triggers a stall — the edge catches, speed drops 40%, load resets to 0, and pop is forfeited. Without this, the optimal play is to always hold maximum.
 
 ### 3.5 Pop
@@ -100,7 +108,15 @@ vSpeed += liftFactor(θ) * FLOAT_K * windPower * dt     // hangtime modifier
 
 `FLOAT_K` is tuned so that holding the kite at zenith for the whole air extends hangtime by **~15%** versus dropping it immediately. Weak-to-moderate float: pop timing remains king, but the arc is steerable enough to make clearing an obstacle a real decision.
 
-Drive is near-zero while airborne regardless of kite position — you cannot accelerate in the air.
+Horizontal speed keeps following the kite while airborne, at `AIR_DRIVE_MIX` of its strength on the water:
+
+```
+speed += AIR_DRIVE_MIX * (driveFactor(θ) * windPower * DRIVE_K - drag(speed)) * dt
+```
+
+`driveFactor` is 0 at zenith, so a kite parked at 12 o'clock makes no drive and the whole term is drag: the air **costs** speed, and that is the price of the hangtime the line above is buying at the same angle. Dropping the kite toward the drive peak pulls the rider forward again and the air is close to free. **Height or speed, chosen with the one control left** — this is what makes the kite angle matter between the pop and the touchdown rather than only at each end.
+
+Because it is a fraction of the water balance rather than a term of its own, the air converges on the same terminal speed the kite position would hold on the water and never passes it. **A jump is somewhere to spend speed or hold it, never a faster way to travel.**
 
 ### 3.7 Landing
 
@@ -108,12 +124,27 @@ Evaluated at touchdown (`altitude <= 0`):
 
 | Condition | Result | `landingQuality` |
 |---|---|---|
-| θ in 35°–75° band, descent rate < `SOFT_LAND` | Clean | 1.0 |
-| θ in 20°–85°, descent rate < `HARD_LAND` | Sketchy — speed −25%, combo held | 0.4 |
+| θ in 35°–75° band, descent rate < `budget(SOFT_LAND)` | Clean | 1.0 |
+| θ in 20°–85°, descent rate < `budget(HARD_LAND)` | Sketchy — speed −25%, combo held | 0.4 |
 | θ < 20° (kite still parked at zenith) | Wipeout | 0 |
-| Descent rate ≥ `HARD_LAND` | Wipeout | 0 |
+| Descent rate ≥ `budget(HARD_LAND)` | Wipeout | 0 |
 
-The player must **redirect the kite back toward the direction of travel before touchdown**. This is the third timing window (after load duration and send timing) and it comes free from the existing input.
+**The descent thresholds scale with the air.** A ballistic arc lands at the speed it left, so descent rate is very nearly the pop impulse — and a *flat* threshold on it is therefore a flat ceiling on height. At `SOFT_LAND` = 8 m/s that ceiling is 3.3m of apex, below every kicker in §4; at `HARD_LAND` = 14 m/s everything over 10m is an unavoidable wipeout. That turns §4's "every record jump comes off a wave face" into a trap and puts the landing table directly at odds with an `apex^1.5` score.
+
+So each threshold becomes a budget, blended in the exponent against the descent the air would have made with no float at all:
+
+```
+ballisticDescent(apex) = sqrt(2 * GRAVITY * apex)
+budget(t, apex)        = t^(1 - LAND_FORGIVE) * ballisticDescent(apex)^LAND_FORGIVE
+```
+
+`LAND_FORGIVE` = 0 is the flat cap; 1 is a pure ratio asking exactly as much of a 2m hop as of a 40m one. At **0.8** the budget grows with the air but more slowly than the descent does: every size of send stays landable, and each larger one demands more of the float on the way down.
+
+What this grades is **how much lift the kite was carrying through the descent** — the one thing the air leaves under the player's control. Landing at the low end of the clean band keeps most of the float (`liftFactor` is 0.74 at 35°, 0.13 at 75°) and touches down soft; landing at the high end trades that away for the drive that holds speed (§3.6).
+
+The player must **redirect the kite back toward the direction of travel before touchdown**. This is the third timing window (after load duration and send timing) and it comes free from the existing input. On the biggest airs it is the binding one: a 48m wake hit at 35kt lands clean only if the kite is held up almost to the water and then swept into the low end of the band.
+
+**Known bind:** a wave-sized air at 12kt (~7m) is sketchy however it is flown. `BASE_SLEW` is 90°/s there and the air is short, so the redirect that would buy the descent budget cannot also reach the clean band in time. Landable, never nailed — widening `CLEAN_BAND`, raising `BASE_SLEW` or raising `LAND_FORGIVE` would open it.
 
 ---
 
@@ -433,9 +464,11 @@ export const TUNING = {
   DRIVE_K: 12,
   DRAG_K: 0.04,
   MAX_SPEED: 22,          // m/s at 35kt
+  AIR_DRIVE_MIX: 0.35,    // share of the drive/drag balance that still applies airborne
 
   // load
   LOAD_RATE: 1.4,         // per second at max speed
+  CARVE_DRAG_K: 0.04,     // extra drag per unit of load — at DRAG_K, a full edge doubles drag
   STALL_GRACE: 0.4,       // s
 
   // pop
@@ -455,6 +488,7 @@ export const TUNING = {
   SKETCHY_BAND: [20, 85],
   SOFT_LAND: 8,           // m/s descent
   HARD_LAND: 14,
+  LAND_FORGIVE: 0.8,      // 0 = flat descent cap, 1 = same demand at every apex
 
   // scoring
   HEIGHT_EXP: 1.5,

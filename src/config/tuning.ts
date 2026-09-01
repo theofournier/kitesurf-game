@@ -20,9 +20,11 @@ export const TUNING = {
   LIFT_EXP: 1.5,          // exponent in liftFactor
   DRAG_K: 0.04,
   MAX_SPEED: 22,          // m/s at 35kt
+  AIR_DRIVE_MIX: 0.35,    // share of the drive/drag balance that still applies airborne
 
   // load
   LOAD_RATE: 1.4,         // per second at max speed
+  CARVE_DRAG_K: 0.04,     // extra drag per unit of load — at DRAG_K, a full edge doubles drag
   STALL_GRACE: 0.4,       // s
   STALL_SPEED_LOSS: 0.4,  // share of speed the edge catch takes away
 
@@ -43,6 +45,7 @@ export const TUNING = {
   SKETCHY_BAND: [20, 85],
   SOFT_LAND: 8,           // m/s descent
   HARD_LAND: 14,
+  LAND_FORGIVE: 0.8,      // 0 = flat descent cap, 1 = same demand at every apex
   CLEAN_QUALITY: 1.0,     // landingQuality of a clean touchdown (spec §3.7)
   SKETCHY_QUALITY: 0.4,
   SKETCHY_SPEED_LOSS: 0.25, // share of speed a sketchy landing takes away

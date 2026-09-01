@@ -132,6 +132,44 @@ export function driveAccel(theta: number, speed: number, wind: number): number {
 }
 
 /**
+ * Horizontal acceleration in the air, m/s² (spec §3.6).
+ *
+ * The same drive-against-drag balance as the water, weakened by AIR_DRIVE_MIX:
+ * with the board out of the water there is much less to push against and much
+ * less holding you back. The sign is the point. A kite parked at 12 o'clock
+ * makes no drive at all, so the whole term is drag and the air costs speed —
+ * that is the price of the hangtime `floatAccel` buys at the same angle.
+ * Dropping the kite toward the drive peak pulls the rider forward again and the
+ * air is close to free. Height or speed, chosen with the one control left.
+ *
+ * Being a fraction of `driveAccel` and not a term of its own, the air can never
+ * carry the rider past the terminal speed the same kite position would hold on
+ * the water: a jump is somewhere to spend speed or to hold it, never a faster
+ * way to travel.
+ */
+export function airAccel(theta: number, speed: number, wind: number): number {
+  return TUNING.AIR_DRIVE_MIX * driveAccel(theta, speed, wind)
+}
+
+/**
+ * The extra drag of an edge, m/s² (spec §3.4):
+ *
+ *     carveDrag(load, speed) = CARVE_DRAG_K * load * speed²
+ *
+ * Carving is how board speed becomes line tension, so it has to be paid for out
+ * of board speed while it happens. CARVE_DRAG_K sits at DRAG_K, so a full edge
+ * doubles the drag term and a light one barely registers.
+ *
+ * This is the counter-pressure the load was missing: holding for a bigger pop
+ * means popping off a slower board, and a slower board loads slower still,
+ * because `loadRate` scales with speed. The hold is no longer free until the
+ * stall — it gets more expensive the longer it runs.
+ */
+export function carveDrag(load: number, speed: number): number {
+  return TUNING.CARVE_DRAG_K * load * speed * speed
+}
+
+/**
  * Speed a kite parked at `theta` settles at — where drive balances drag — held
  * to MAX_SPEED, which spec §3.1 makes the ceiling on the state variable itself.
  *
@@ -210,25 +248,76 @@ export function floatAccel(theta: number, wind: number): number {
 }
 
 /**
+ * The descent a no-float air of `apex` metres arrives at, m/s: `sqrt(2 g h)`.
+ *
+ * A ballistic arc lands at exactly the speed it left, so this is what every
+ * jump would touch down at if the kite made no lift at all. It is the reference
+ * the landing budget is measured against, and it is why a flat descent cap
+ * cannot work: descent is very nearly the pop impulse, so a fixed threshold on
+ * it is a fixed ceiling on apex.
+ */
+export function ballisticDescent(apex: number): number {
+  return Math.sqrt(2 * TUNING.GRAVITY * apex)
+}
+
+/**
+ * How much descent a `threshold` row of the landing table allows an air that
+ * reached `apex` metres, m/s (spec §3.7):
+ *
+ *     budget = threshold^(1 - LAND_FORGIVE) * ballisticDescent(apex)^LAND_FORGIVE
+ *
+ * A flat threshold makes the table a disguised height cap. A ballistic air
+ * arrives at the speed it left, so SOFT_LAND alone bars a clean landing above
+ * 3.3m of apex and HARD_LAND alone makes anything over 10m an unavoidable
+ * wipeout — below every kicker in spec §4, and unmoved by any amount of skill.
+ * That is the wrong shape for a game that scores apex^1.5 and tells the player
+ * to go and hit a wave.
+ *
+ * So the budget is blended, in the exponent, between the flat threshold and the
+ * descent the air would have made with no float at all. LAND_FORGIVE picks the
+ * blend: 0 is the flat cap, 1 is a pure ratio that asks exactly as much of a 2m
+ * hop as of a 40m one. In between, the budget grows with the air but more
+ * slowly than the descent does — every size of send stays landable, and each
+ * larger one asks for more of the float on the way down.
+ *
+ * What that grades is how much lift the kite was carrying through the descent,
+ * which is the one thing the air leaves the player in control of. Landing at
+ * the low end of CLEAN_BAND keeps most of the float (`liftFactor` is 0.74 at
+ * 35deg and 0.13 at 75deg) and touches down soft; landing at the high end
+ * trades that away for the drive that holds speed (§3.6). That is the choice
+ * the table exists to ask.
+ */
+export function descentBudget(threshold: number, apex: number): number {
+  const forgive = TUNING.LAND_FORGIVE
+  return threshold ** (1 - forgive) * ballisticDescent(apex) ** forgive
+}
+
+/**
  * The landing table (spec §3.7), evaluated at touchdown. Returns
  * `landingQuality`: 1.0 clean, 0.4 sketchy, 0 wipeout.
  *
- * `descent` is the descent rate, positive downward. The rows are tested in the
- * spec's order and anything that matches neither is a wipeout, which covers
- * both of the spec's explicit wipeout rows — a kite still parked at zenith
- * (θ < 20) and a descent at or past HARD_LAND — plus the case its table leaves
- * out, a kite dumped past the sketchy band with a gentle descent. Landing with
- * the kite at the edge of the window is a wipeout for the same reason landing
- * with it at zenith is: it is not pulling in the direction of travel.
+ * `descent` is the descent rate, positive downward, and `apex` the height the
+ * air reached — the descent is only ever judged against what that apex makes
+ * unavoidable, via `descentBudget`. The rows are tested in the spec's order and
+ * anything that matches neither is a wipeout, which covers both of the spec's
+ * explicit wipeout rows — a kite still parked at zenith (θ < 20) and a descent
+ * past the sketchy budget — plus the case its table leaves out, a kite dumped
+ * past the sketchy band with a gentle descent. Landing with the kite at the
+ * edge of the window is a wipeout for the same reason landing with it at zenith
+ * is: it is not pulling in the direction of travel.
  *
  * Redirecting the kite back toward the direction of travel before touchdown is
- * the third timing window of the game, after load duration and send timing.
+ * the third timing window of the game, after load duration and send timing, and
+ * with the budget scaled to the air it is the one the biggest jumps live on.
+ *
+ * `apex` is the apex of a real air, so it is always above zero where the sim
+ * calls this: a pop that made no height never left the water (§3.5).
  */
-export function landingQuality(theta: number, descent: number): number {
+export function landingQuality(theta: number, descent: number, apex: number): number {
   if (
     theta >= TUNING.CLEAN_BAND[0] &&
     theta <= TUNING.CLEAN_BAND[1] &&
-    descent < TUNING.SOFT_LAND
+    descent < descentBudget(TUNING.SOFT_LAND, apex)
   ) {
     return TUNING.CLEAN_QUALITY
   }
@@ -236,12 +325,22 @@ export function landingQuality(theta: number, descent: number): number {
   if (
     theta >= TUNING.SKETCHY_BAND[0] &&
     theta <= TUNING.SKETCHY_BAND[1] &&
-    descent < TUNING.HARD_LAND
+    descent < descentBudget(TUNING.HARD_LAND, apex)
   ) {
     return TUNING.SKETCHY_QUALITY
   }
 
   return 0
+}
+
+/**
+ * Integrates one step of horizontal acceleration, holding `speed` inside the
+ * spec §3.1 range. The water and the air both go through here so the ceiling
+ * and the floor are stated once.
+ */
+function applySpeed(rider: RiderState, accel: number, dt: number): void {
+  const speed = rider.speed + accel * dt
+  rider.speed = speed < 0 ? 0 : speed > TUNING.MAX_SPEED ? TUNING.MAX_SPEED : speed
 }
 
 /**
@@ -294,7 +393,9 @@ function release(rider: RiderState, wind: number): void {
  */
 function touchdown(rider: RiderState): void {
   const descent = -rider.vSpeed
-  const quality = landingQuality(rider.kite.angle, descent)
+  // `apex` is this air's, not the last one's: stepAir raises it on the way up
+  // and only calls in here once the altitude has come back to the water.
+  const quality = landingQuality(rider.kite.angle, descent, rider.apex)
 
   rider.altitude = 0
   rider.vSpeed = 0
@@ -323,12 +424,17 @@ function touchdown(rider: RiderState): void {
 
 /**
  * One step of the air (spec §3.6): ballistic, plus whatever float the kite is
- * making. Drive is absent at every kite angle — you cannot accelerate in the
- * air — so `speed` is untouched here and the jump carries the speed it left on.
+ * making, plus what the same kite position does to horizontal speed.
+ *
+ * The two pull opposite ways on purpose. Holding the kite up floats the air out
+ * and bleeds speed; dropping it cuts the air short and drives the speed back.
+ * That trade is the whole of the airborne decision, and it is why the kite
+ * angle matters between the pop and the touchdown rather than only at each end.
  */
 function stepAir(rider: RiderState, wind: number, dt: number): void {
   rider.vSpeed -= TUNING.GRAVITY * dt
   rider.vSpeed += floatAccel(rider.kite.angle, wind) * dt
+  applySpeed(rider, airAccel(rider.kite.angle, rider.speed, wind), dt)
   rider.altitude += rider.vSpeed * dt
   rider.airTime += dt
   if (rider.altitude > rider.apex) rider.apex = rider.altitude
@@ -336,16 +442,17 @@ function stepAir(rider: RiderState, wind: number, dt: number): void {
   if (rider.altitude <= 0) touchdown(rider)
 }
 
-/** One step on the water (spec §3.3, §3.4): drive against drag, and load. */
+/** One step on the water (spec §3.3, §3.4): drive against drag and edge, and load. */
 function stepWater(rider: RiderState, input: RiderInput, wind: number, dt: number): void {
   // The relaunch beat is dead time by design: the kite is in the water, so
   // there is nothing to drive against and nothing to edge against either.
   if (rider.phase === PHASE.WIPEOUT) return
 
-  let speed = rider.speed + driveAccel(rider.kite.angle, rider.speed, wind) * dt
-  if (speed < 0) speed = 0
-  else if (speed > TUNING.MAX_SPEED) speed = TUNING.MAX_SPEED
-  rider.speed = speed
+  // The edge is read at the load it has already built, before this step adds to
+  // it, so the scrub follows the carve rather than leading it by a frame.
+  let accel = driveAccel(rider.kite.angle, rider.speed, wind)
+  if (input.loading) accel -= carveDrag(rider.load, rider.speed)
+  applySpeed(rider, accel, dt)
 
   if (input.loading) buildLoad(rider, dt)
 }

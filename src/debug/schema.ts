@@ -79,12 +79,22 @@ export const TUNING_SCHEMA: TuningGroup[] = [
       { key: 'LIFT_EXP', comment: 'exponent in liftFactor' },
       { key: 'DRAG_K' },
       { key: 'MAX_SPEED', comment: 'm/s at 35kt' },
+      // A share of the water balance, so the air can never outrun the water.
+      {
+        key: 'AIR_DRIVE_MIX',
+        comment: 'share of the drive/drag balance that still applies airborne',
+        fields: [{ min: 0, max: 1 }],
+      },
     ],
   },
   {
     title: 'load',
     slots: [
       { key: 'LOAD_RATE', comment: 'per second at max speed' },
+      {
+        key: 'CARVE_DRAG_K',
+        comment: 'extra drag per unit of load — at DRAG_K, a full edge doubles drag',
+      },
       { key: 'STALL_GRACE', comment: 's' },
       // A share of the speed the rider had is a 0..1 fraction.
       {
@@ -135,6 +145,12 @@ export const TUNING_SCHEMA: TuningGroup[] = [
       },
       { key: 'SOFT_LAND', comment: 'm/s descent' },
       { key: 'HARD_LAND' },
+      // A blend between two shapes of gate, so it is a 0..1 fraction.
+      {
+        key: 'LAND_FORGIVE',
+        comment: '0 = flat descent cap, 1 = same demand at every apex',
+        fields: [{ min: 0, max: 1 }],
+      },
       // The two qualities are what the spec §3.7 table pays out: 0..1, and
       // clean is the top of the scale by definition.
       {

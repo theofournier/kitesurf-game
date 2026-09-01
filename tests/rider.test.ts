@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { TUNING } from '../src/config/tuning.ts'
 import { WINDOW_MAX, driveFactor, liftFactor, windPower } from '../src/sim/kite.ts'
-import { DT, createInput } from '../src/sim/loop.ts'
+import { DT, createInput, type RiderInput } from '../src/sim/loop.ts'
 import {
   PHASE,
+  airAccel,
+  ballisticDescent,
+  carveDrag,
   createRiderState,
+  descentBudget,
   drag,
   driveAccel,
   floatAccel,
@@ -14,6 +18,7 @@ import {
   popImpulse,
   stepRider,
   terminalSpeed,
+  type RiderState,
 } from '../src/sim/rider.ts'
 
 const KT_12 = 12
@@ -21,6 +26,13 @@ const KT_35 = 35
 
 /** A kite angle inside the sketchy band but outside the clean one (spec §3.7). */
 const SKETCHY_ANGLE = 25
+
+/**
+ * The apex whose no-float descent is exactly SOFT_LAND, so `descentBudget` on
+ * the clean row returns SOFT_LAND itself. The landing table is written against
+ * this air, which pins the rows to the constants the human tunes.
+ */
+const REF_APEX = TUNING.SOFT_LAND ** 2 / (2 * TUNING.GRAVITY)
 
 /** Input that parks the kite at `theta`, held there by the caller's stepping. */
 function inputAt(theta: number) {
@@ -211,6 +223,21 @@ function loadingAt(theta: number) {
 }
 
 /**
+ * Holds the edge until the load goes full, and returns the step it did on.
+ *
+ * The carve scrubs the speed the load builds against (spec §3.4), so this is no
+ * longer the flat `1 / LOAD_RATE` a pinned speed would give — every test that
+ * needs to be at full load asks for it rather than counting it out.
+ */
+function stepToFullLoad(rider: RiderState, input: RiderInput, wind: number): number {
+  for (let i = 1; i <= 600; i++) {
+    stepRider(rider, input, wind, DT)
+    if (rider.load >= 1) return i
+  }
+  throw new Error('the load never reached 1')
+}
+
+/**
  * Pops a rider carrying `load` with the kite parked at `theta`, then flies it to
  * touchdown with the kite aimed at `airTheta` — which it slews to, exactly as it
  * would under a player's thumb. `pin` teleports the kite there instead, for the
@@ -232,15 +259,20 @@ function fly(load: number, theta: number, wind: number, airTheta = theta, pin = 
     rider.kite.aim = airTheta
   }
 
+  const launchSpeed = rider.speed
   let peak = 0
   let steps = 0
+  // The last speed the air itself produced. Read before each step so it survives
+  // the one that lands, where the landing table spends it (spec §3.7).
+  let landingSpeed = rider.speed
   for (; steps < 6000 && rider.airborne; steps++) {
+    landingSpeed = rider.speed
     stepRider(rider, air, wind, DT)
     if (rider.altitude > peak) peak = rider.altitude
   }
 
   expect(rider.airborne).toBe(false)
-  return { rider, peak, hangtime: steps * DT, impulse: rider.lastPop }
+  return { rider, peak, hangtime: steps * DT, impulse: rider.lastPop, launchSpeed, landingSpeed }
 }
 
 describe('load (spec §3.4)', () => {
@@ -261,24 +293,28 @@ describe('load (spec §3.4)', () => {
     expect(loadRate(TUNING.MAX_SPEED / 2)).toBeCloseTo(TUNING.LOAD_RATE / 2, 10)
   })
 
-  it('reaches 1.0 in ~0.71s at MAX_SPEED', () => {
+  it('reaches 1.0 a little slower than 0.71s, because the carve scrubs what it builds against', () => {
     const rider = atFullSpeed()
     const input = loadingAt(70.53)
 
     let fullAt = -1
-    for (let i = 1; i <= 120 && fullAt < 0; i++) {
+    let previous = rider.speed
+    for (let i = 1; i <= 240 && fullAt < 0; i++) {
       stepRider(rider, input, KT_35, DT)
-      // The 35kt drive at the peak outruns drag, so the ceiling holds the
-      // rider at exactly MAX_SPEED and the load builds at exactly LOAD_RATE.
-      expect(rider.speed).toBe(TUNING.MAX_SPEED)
+      // Even at the 35kt drive peak, where drive alone outruns drag and pins the
+      // rider on the MAX_SPEED ceiling, the edge takes back more than it makes.
+      expect(rider.speed).toBeLessThanOrEqual(previous)
+      previous = rider.speed
       if (rider.load >= 1) fullAt = i
     }
 
-    const expected = 1 / TUNING.LOAD_RATE
-    expect(fullAt * DT).toBeCloseTo(expected, 2)
-    // Within the step the fixed timestep can resolve, and never early.
-    expect(fullAt * DT).toBeGreaterThanOrEqual(expected)
-    expect((fullAt - 1) * DT).toBeLessThan(expected)
+    // 1/LOAD_RATE is the time it would take against a speed that never moved.
+    // The carve is what puts the real number on the far side of it (spec §3.4).
+    const ideal = 1 / TUNING.LOAD_RATE
+    expect(fullAt).toBeGreaterThan(0)
+    expect(fullAt * DT).toBeGreaterThan(ideal)
+    expect(fullAt * DT).toBeLessThan(ideal * 1.2)
+    expect(rider.speed).toBeLessThan(TUNING.MAX_SPEED)
   })
 
   it('caps at 1.0', () => {
@@ -322,13 +358,12 @@ describe('load (spec §3.4)', () => {
 })
 
 describe('stall (spec §3.4)', () => {
-  const fullAt = Math.ceil(1 / TUNING.LOAD_RATE / DT)
-
   /** Holds the load for `steps` past the step the load went full. */
   function holdPastFull(steps: number) {
     const rider = atFullSpeed()
     const input = loadingAt(70.53)
-    for (let i = 0; i < fullAt + steps; i++) stepRider(rider, input, KT_35, DT)
+    stepToFullLoad(rider, input, KT_35)
+    for (let i = 0; i < steps; i++) stepRider(rider, input, KT_35, DT)
     return { rider, input }
   }
 
@@ -338,15 +373,22 @@ describe('stall (spec §3.4)', () => {
 
     expect(rider.overload).toBeLessThanOrEqual(TUNING.STALL_GRACE + 1e-9)
     expect(rider.load).toBe(1)
-    expect(rider.speed).toBe(TUNING.MAX_SPEED)
+    // Off the ceiling: a full edge held past full load is still scrubbing.
+    expect(rider.speed).toBeLessThan(TUNING.MAX_SPEED)
     expect(rider.popForfeit).toBe(false)
   })
 
   it('drops speed 40%, resets load and forfeits the pop past the grace', () => {
     const past = Math.floor(TUNING.STALL_GRACE / DT) + 1
+    const inside = holdPastFull(past - 1).rider.speed
     const { rider, input } = holdPastFull(past)
 
-    expect(rider.speed).toBeCloseTo(TUNING.MAX_SPEED * (1 - TUNING.STALL_SPEED_LOSS), 6)
+    // The cut is 40% of the speed the carve left, not of MAX_SPEED, and the step
+    // it fires on runs its own drive and carve first — so the observable ratio
+    // sits just under STALL_SPEED_LOSS rather than exactly on it.
+    const kept = rider.speed / inside
+    expect(kept).toBeLessThan(1 - TUNING.STALL_SPEED_LOSS)
+    expect(kept).toBeGreaterThan(1 - TUNING.STALL_SPEED_LOSS - 0.02)
     expect(rider.load).toBe(0)
     expect(rider.overload).toBe(0)
     expect(rider.popForfeit).toBe(true)
@@ -572,48 +614,137 @@ describe('air (spec §3.6)', () => {
     expect(dropped.hangtime).toBeCloseTo(ballistic, 1)
   })
 
-  it('never accelerates the rider horizontally, at any kite angle', () => {
-    // Speed is built with the kite low and the input free — a long hold would
-    // stall long before the rider got up to speed, and forfeit the pop.
-    const rider = parkedAt(70)
-    const fast = inputAt(70)
-    for (let i = 0; i < 600; i++) stepRider(rider, fast, KT_12, DT)
+  it('costs speed with the kite at 12 and gives it back with the kite low', () => {
+    // The airborne trade of §3.6, on one pop flown three ways. Parking at zenith
+    // buys the longest air and pays for it; the drive peak buys the shortest and
+    // rides away on the speed it kept.
+    const zenith = fly(1, 0, KT_12, 0, true)
+    const middle = fly(1, 0, KT_12, 55, true)
+    const low = fly(1, 0, KT_12, 70.53, true)
 
-    rider.load = 1
-    rider.loading = true
-    rider.kite.angle = 0
-    stepRider(rider, inputAt(0), KT_12, DT)
-    expect(rider.airborne).toBe(true)
+    expect(zenith.impulse).toBeCloseTo(low.impulse, 10)
+    expect(zenith.launchSpeed).toBeCloseTo(low.launchSpeed, 10)
 
-    // Sweep the kite across the whole window during the air. Nowhere in it —
-    // least of all the drive peak — is there any acceleration to be had.
-    const launch = rider.speed
-    let steps = 0
-    while (rider.airborne) {
-      const theta = (steps * WINDOW_MAX * 2) / 60 // a full sweep out and back
-      stepRider(rider, inputAt(theta % WINDOW_MAX), KT_12, DT)
-      if (rider.airborne) expect(rider.speed).toBe(launch)
-      steps++
+    // Monotonic in the kite angle: the lower the kite, the more speed survives.
+    expect(zenith.landingSpeed).toBeLessThan(middle.landingSpeed)
+    expect(middle.landingSpeed).toBeLessThan(low.landingSpeed)
+
+    // And the hangtime runs the other way, which is what makes it a choice.
+    expect(zenith.hangtime).toBeGreaterThan(middle.hangtime)
+    expect(middle.hangtime).toBeGreaterThan(low.hangtime)
+  })
+
+  it('is the same balance as the water, weakened by AIR_DRIVE_MIX', () => {
+    for (let theta = 0; theta <= WINDOW_MAX; theta += 1) {
+      for (const wind of [KT_12, KT_35]) {
+        for (const speed of [0, 8, TUNING.MAX_SPEED]) {
+          expect(airAccel(theta, speed, wind)).toBeCloseTo(
+            TUNING.AIR_DRIVE_MIX * driveAccel(theta, speed, wind),
+            10,
+          )
+        }
+      }
     }
   })
 
-  it('holds the speed it left the water with, whatever the wind', () => {
+  it('only ever decelerates with the kite at 12 o\'clock, at any speed or wind', () => {
+    expect(airAccel(0, 0, KT_35)).toBeCloseTo(0, 10)
+    for (const speed of [1, 8, TUNING.MAX_SPEED]) {
+      expect(airAccel(0, speed, KT_12)).toBeLessThan(0)
+      expect(airAccel(0, speed, KT_35)).toBeLessThan(0)
+    }
+  })
+
+  it('never carries the rider past the terminal speed of the angle being flown', () => {
+    // The air is somewhere to spend speed or hold it, never a faster way to
+    // travel: airAccel is a fraction of driveAccel, so it turns over at exactly
+    // the speed the same kite position would settle at on the water.
     for (const wind of [KT_12, KT_35]) {
-      const rider = parkedAt(50)
-      for (let i = 0; i < 600; i++) stepRider(rider, inputAt(50), wind, DT)
+      for (const airTheta of [35, 55, 70.53, WINDOW_MAX]) {
+        const rider = parkedAt(70.53)
+        for (let i = 0; i < 900; i++) stepRider(rider, inputAt(70.53), wind, DT)
 
-      rider.load = 1
-      rider.loading = true
-      rider.kite.angle = 0
-      stepRider(rider, inputAt(0), wind, DT)
+        rider.load = 1
+        rider.loading = true
+        rider.kite.angle = 0
+        stepRider(rider, inputAt(0), wind, DT)
+        expect(rider.airborne).toBe(true)
 
-      const launch = rider.speed
-      const input = inputAt(TUNING.CLEAN_BAND[0] + 5)
-      while (rider.airborne) {
-        stepRider(rider, input, wind, DT)
-        if (rider.airborne) expect(rider.speed).toBe(launch)
+        const ceiling = Math.max(terminalSpeed(airTheta, wind), rider.speed)
+        const input = inputAt(airTheta)
+        while (rider.airborne) {
+          rider.kite.angle = airTheta
+          rider.kite.target = airTheta
+          rider.kite.aim = airTheta
+          stepRider(rider, input, wind, DT)
+          if (rider.airborne) expect(rider.speed).toBeLessThanOrEqual(ceiling + 1e-9)
+        }
       }
     }
+  })
+})
+
+describe('carveDrag (spec §3.4)', () => {
+  it('is quadratic in speed and linear in load', () => {
+    expect(carveDrag(1, 10)).toBeCloseTo(TUNING.CARVE_DRAG_K * 100, 10)
+    expect(carveDrag(1, 20)).toBeCloseTo(4 * carveDrag(1, 10), 10)
+    expect(carveDrag(0.5, 10)).toBeCloseTo(carveDrag(1, 10) / 2, 10)
+  })
+
+  it('costs nothing before there is an edge to carve against', () => {
+    expect(carveDrag(0, TUNING.MAX_SPEED)).toBe(0)
+    expect(carveDrag(1, 0)).toBe(0)
+  })
+
+  it('scrubs speed while the load builds, and only while it is held', () => {
+    // Two riders at the same cruise, one edging and one not. Same kite angle,
+    // same wind — the only difference is the thumb on the load.
+    const carving = parkedAt(70.53)
+    const cruising = parkedAt(70.53)
+    for (let i = 0; i < 900; i++) {
+      stepRider(carving, inputAt(70.53), KT_12, DT)
+      stepRider(cruising, inputAt(70.53), KT_12, DT)
+    }
+    const cruise = carving.speed
+
+    for (let i = 0; i < 90; i++) {
+      stepRider(carving, loadingAt(70.53), KT_12, DT)
+      stepRider(cruising, inputAt(70.53), KT_12, DT)
+    }
+
+    expect(carving.load).toBeGreaterThan(0)
+    expect(carving.speed).toBeLessThan(cruise)
+    expect(carving.speed).toBeLessThan(cruising.speed)
+    // The control rider is untouched: still on terminal, still going nowhere but
+    // forward. Only the thumb on the load costs anything.
+    expect(cruising.speed).toBeGreaterThanOrEqual(cruise)
+    expect(cruising.speed).toBeCloseTo(terminalSpeed(70.53, KT_12), 2)
+
+    // Letting the edge go puts the speed back: the scrub is the carve, not a
+    // permanent tax on having carved.
+    const scrubbed = carving.speed
+    for (let i = 0; i < 300; i++) stepRider(carving, inputAt(70.53), KT_12, DT)
+    expect(carving.speed).toBeGreaterThan(scrubbed)
+    // Back on terminal, to within what quadratic drag has closed in 5 seconds.
+    expect(carving.speed).toBeCloseTo(terminalSpeed(70.53, KT_12), 1)
+  })
+
+  it('settles the carve at the terminal speed of the heavier drag', () => {
+    // A full edge doubles the drag term, so the equilibrium it holds is the
+    // ordinary terminal over sqrt(1 + CARVE_DRAG_K/DRAG_K).
+    const rider = parkedAt(70.53)
+    rider.load = 1
+    const input = loadingAt(70.53)
+    for (let i = 0; i < 1800; i++) {
+      // Pinned full: the equilibrium under test is the one a held edge holds.
+      rider.load = 1
+      rider.overload = 0
+      stepRider(rider, input, KT_12, DT)
+    }
+
+    const expected =
+      terminalSpeed(70.53, KT_12) / Math.sqrt(1 + TUNING.CARVE_DRAG_K / TUNING.DRAG_K)
+    expect(rider.speed).toBeCloseTo(expected, 2)
   })
 })
 
@@ -621,25 +752,75 @@ describe('landing table (spec §3.7)', () => {
   const [CLEAN_LO, CLEAN_HI] = TUNING.CLEAN_BAND
   const [SKETCHY_LO, SKETCHY_HI] = TUNING.SKETCHY_BAND
 
+  // Both budgets at REF_APEX, where the clean one is SOFT_LAND exactly.
+  const SOFT = descentBudget(TUNING.SOFT_LAND, REF_APEX)
+  const HARD = descentBudget(TUNING.HARD_LAND, REF_APEX)
+
   /** Every row of the spec §3.7 table, plus the case the table leaves out. */
   const rows: [string, number, number, number][] = [
-    // [name, kite angle at touchdown, descent rate, landingQuality]
-    ['clean, mid band and soft', 55, TUNING.SOFT_LAND - 1, TUNING.CLEAN_QUALITY],
+    // [name, kite angle at touchdown, descent rate, landingQuality] — all at REF_APEX
+    ['clean, mid band and soft', 55, SOFT - 1, TUNING.CLEAN_QUALITY],
     ['clean, at the low edge of the band', CLEAN_LO, 0, TUNING.CLEAN_QUALITY],
-    ['clean, at the high edge of the band', CLEAN_HI, TUNING.SOFT_LAND - 0.1, TUNING.CLEAN_QUALITY],
-    ['sketchy, in band but landed hard', 55, TUNING.SOFT_LAND, TUNING.SKETCHY_QUALITY],
+    ['clean, at the high edge of the band', CLEAN_HI, SOFT - 0.1, TUNING.CLEAN_QUALITY],
+    ['sketchy, in band but landed hard', 55, SOFT, TUNING.SKETCHY_QUALITY],
     ['sketchy, kite low of the clean band', SKETCHY_LO, 1, TUNING.SKETCHY_QUALITY],
     ['sketchy, kite past the clean band', SKETCHY_HI, 1, TUNING.SKETCHY_QUALITY],
-    ['sketchy, just inside HARD_LAND', 55, TUNING.HARD_LAND - 0.1, TUNING.SKETCHY_QUALITY],
+    ['sketchy, just inside the sketchy budget', 55, HARD - 0.1, TUNING.SKETCHY_QUALITY],
     ['wipeout, kite still parked at zenith', 0, 1, 0],
     ['wipeout, kite just under the sketchy band', SKETCHY_LO - 0.1, 0, 0],
-    ['wipeout, descent at HARD_LAND', 55, TUNING.HARD_LAND, 0],
-    ['wipeout, descent past HARD_LAND', 55, TUNING.HARD_LAND + 10, 0],
+    ['wipeout, descent at the sketchy budget', 55, HARD, 0],
+    ['wipeout, descent past the sketchy budget', 55, HARD + 10, 0],
     ['wipeout, kite dumped past the sketchy band', WINDOW_MAX, 0, 0],
   ]
 
   it.each(rows)('%s', (_name, theta, descent, expected) => {
-    expect(landingQuality(theta, descent)).toBe(expected)
+    expect(landingQuality(theta, descent, REF_APEX)).toBe(expected)
+  })
+
+  it('is SOFT_LAND itself on the air the constants are written for', () => {
+    // LAND_FORGIVE blends between the flat threshold and the ballistic descent,
+    // so where the two agree the blend has to return them both.
+    expect(ballisticDescent(REF_APEX)).toBeCloseTo(TUNING.SOFT_LAND, 10)
+    expect(descentBudget(TUNING.SOFT_LAND, REF_APEX)).toBeCloseTo(TUNING.SOFT_LAND, 10)
+
+    const hardApex = TUNING.HARD_LAND ** 2 / (2 * TUNING.GRAVITY)
+    expect(descentBudget(TUNING.HARD_LAND, hardApex)).toBeCloseTo(TUNING.HARD_LAND, 10)
+  })
+
+  it('lands at the speed it left, so a flat cap would be a height cap', () => {
+    // The defect the budget exists to fix, stated as the test that would have
+    // caught it: a ballistic air arrives at its launch impulse, so judging that
+    // number against a constant is judging the height against a constant.
+    for (const impulse of [4, 8, 12, 20]) {
+      expect(ballisticDescent(peakHeight(impulse))).toBeCloseTo(impulse, 10)
+    }
+  })
+
+  it('grows the budget with the air, but slower than the descent grows', () => {
+    let previousBudget = 0
+    let previousShare = Number.POSITIVE_INFINITY
+    for (const apex of [1, 3, 8, 15, 30, 60]) {
+      const budget = descentBudget(TUNING.SOFT_LAND, apex)
+      // Absolutely more forgiving as the air gets bigger: nothing is barred by
+      // size the way a flat SOFT_LAND barred everything over 3.3m.
+      expect(budget).toBeGreaterThan(previousBudget)
+      previousBudget = budget
+
+      // But a shrinking share of the descent that apex makes unavoidable, so a
+      // bigger send asks for more of the float on the way down.
+      const share = budget / ballisticDescent(apex)
+      expect(share).toBeLessThan(previousShare)
+      previousShare = share
+      expect(share).toBeGreaterThan(0)
+    }
+  })
+
+  it('leaves the sketchy budget above the clean one at every apex', () => {
+    for (let apex = 0.5; apex <= 60; apex += 0.5) {
+      expect(descentBudget(TUNING.HARD_LAND, apex)).toBeGreaterThan(
+        descentBudget(TUNING.SOFT_LAND, apex),
+      )
+    }
   })
 
   it('pays clean, sketchy and nothing, in that order', () => {
@@ -655,6 +836,7 @@ describe('landing table (spec §3.7)', () => {
       rider.airborne = true
       rider.altitude = 0.001
       rider.vSpeed = -descent
+      rider.apex = REF_APEX
       rider.kite.angle = theta
       rider.kite.target = theta
       rider.kite.aim = theta
@@ -662,7 +844,121 @@ describe('landing table (spec §3.7)', () => {
       stepRider(rider, inputAt(theta), KT_12, DT)
 
       expect(rider.airborne).toBe(false)
-      expect(rider.landingQuality).toBe(landingQuality(theta, rider.descentRate))
+      expect(rider.landingQuality).toBe(landingQuality(theta, rider.descentRate, REF_APEX))
+    }
+  })
+})
+
+describe('landing a kicker air (spec §3.7, §4)', () => {
+  /**
+   * Flies an air of `impulse` — a pop off a kicker, which is how spec §4 says
+   * the big ones happen — with the kite held at zenith for `holdFrac` of the
+   * flight and then steered to `landTheta`. The kite slews at its own rate, so
+   * a redirect asked for too late simply does not arrive.
+   */
+  function sendAndLand(impulse: number, wind: number, landTheta: number, holdFrac: number) {
+    const rider = createRiderState()
+    rider.speed = 15
+    rider.airborne = true
+    rider.vSpeed = impulse
+
+    // The float-extended flight, which is what the redirect is timed against.
+    const flight = (2 * impulse) / (TUNING.GRAVITY - floatAccel(0, wind))
+    let t = 0
+    while (rider.airborne && t < 30) {
+      stepRider(rider, inputAt(t > flight * holdFrac ? landTheta : 0), wind, DT)
+      t += DT
+    }
+
+    expect(rider.airborne).toBe(false)
+    return rider
+  }
+
+  /** The best flat-water pop the wind allows, times a kicker bonus (spec §4.2). */
+  function kickerImpulse(wind: number, bonus: number) {
+    let best = 0
+    for (let theta = 0; theta <= WINDOW_MAX; theta += 0.5) {
+      const impulse = popImpulse(1, theta, wind, bonus)
+      if (impulse > best) best = impulse
+    }
+    return best
+  }
+
+  it('lands the biggest air in the game clean, flown down on the float', () => {
+    // A 35kt wake hit: the ×2.4 of spec §4.2 on the best pop 35kt allows. Under
+    // a flat SOFT_LAND/HARD_LAND this air was not landable by anyone — it
+    // arrives far past HARD_LAND however it is flown, so it was an automatic
+    // wipeout and the biggest kicker in the game was a pure trap.
+    const rider = sendAndLand(kickerImpulse(KT_35, TUNING.BONUS_WAKE), KT_35, 35, 0.9)
+
+    expect(rider.apex).toBeGreaterThan(40)
+    expect(rider.descentRate).toBeGreaterThan(TUNING.HARD_LAND)
+    expect(rider.landingQuality).toBe(TUNING.CLEAN_QUALITY)
+  })
+
+  it('still wipes that air out for dropping the kite early', () => {
+    // Same pop, same wind, kite dumped low and early: the float is spent going
+    // up instead of coming down, and the descent blows the budget its own apex
+    // set. The size of the send is landable; flying it badly is not.
+    const rider = sendAndLand(kickerImpulse(KT_35, TUNING.BONUS_WAKE), KT_35, 55, 0.6)
+
+    expect(rider.apex).toBeGreaterThan(40)
+    expect(rider.landingQuality).toBe(0)
+    expect(rider.phase).toBe(PHASE.WIPEOUT)
+  })
+
+  const KICKERS: [string, number][] = [
+    ['flat', 1],
+    ['chop', TUNING.BONUS_CHOP],
+    ['wave', TUNING.BONUS_WAVE],
+    ['wake', TUNING.BONUS_WAKE],
+  ]
+
+  /** The best and worst verdict over a spread of ways to fly the same pop. */
+  function spread(wind: number, bonus: number) {
+    const impulse = kickerImpulse(wind, bonus)
+    let best = 0
+    let worst = 1
+    for (const landTheta of [35, 45, 55, 70]) {
+      for (const holdFrac of [0, 0.3, 0.6, 0.9]) {
+        const quality = sendAndLand(impulse, wind, landTheta, holdFrac).landingQuality
+        if (quality > best) best = quality
+        if (quality < worst) worst = quality
+      }
+    }
+    return { best, worst }
+  }
+
+  it('leaves every kicker at every tier landable', () => {
+    // The claim the budget exists to make good on: some way of flying it scores,
+    // at every kicker and every wind. The height cap the flat gate hid inside
+    // the landing table is gone, and §4's "every record jump comes off a wave
+    // face" is a strategy rather than a trap.
+    for (const wind of [KT_12, 20, KT_35]) {
+      for (const [, bonus] of KICKERS) {
+        expect(spread(wind, bonus).best).toBeGreaterThan(0)
+      }
+    }
+  })
+
+  it('makes none of them free, except the one bind at 12kt', () => {
+    for (const wind of [KT_12, 20, KT_35]) {
+      for (const [name, bonus] of KICKERS) {
+        // A 7m air at 12kt is the one place the verdict does not move: BASE_SLEW
+        // is 90deg/s there, and the air is short, so the redirect that would
+        // buy the descent budget cannot also reach CLEAN_BAND in time. Every way
+        // of flying it is sketchy — landable, never nailed, never lost. Pinned
+        // here rather than left silent, so tuning that opens it up says so.
+        if (wind === KT_12 && name === 'wave') {
+          const { best, worst } = spread(wind, bonus)
+          expect(best).toBe(TUNING.SKETCHY_QUALITY)
+          expect(worst).toBe(TUNING.SKETCHY_QUALITY)
+          continue
+        }
+
+        const { best, worst } = spread(wind, bonus)
+        expect(worst).toBeLessThan(best)
+      }
     }
   })
 })
@@ -672,12 +968,15 @@ describe('landing table (spec §3.7)', () => {
  * forced onto the water at `descent` m/s so every row of the table is
  * reachable without having to find a flight that produces it.
  */
-function land(theta: number, descent: number, speed = 10) {
+function land(theta: number, descent: number, speed = 10, apex = REF_APEX) {
   const rider = parkedAt(theta)
   rider.speed = speed
   rider.airborne = true
   rider.altitude = 0.001
   rider.vSpeed = -descent
+  // The descent is judged against the air it came off (spec §3.7), and this
+  // touchdown is synthesized rather than flown, so it is given one.
+  rider.apex = apex
 
   stepRider(rider, inputAt(theta), KT_12, DT)
   return rider
@@ -689,15 +988,18 @@ describe('landing consequences (spec §3.7, §7.2)', () => {
 
     expect(rider.landingQuality).toBe(TUNING.CLEAN_QUALITY)
     expect(rider.phase).toBe(PHASE.LANDING)
-    expect(rider.speed).toBeCloseTo(10, 6)
+    // A clean landing takes nothing — the only thing between 10 m/s and the
+    // touchdown is the one step of air the helper flies (spec §3.6).
+    expect(rider.speed).toBeCloseTo(10 + airAccel(55, 10, KT_12) * DT, 6)
   })
 
   it('takes SKETCHY_SPEED_LOSS off a sketchy one, and keeps the rider riding', () => {
     const rider = land(SKETCHY_ANGLE, 2, 10)
 
+    const entry = 10 + airAccel(SKETCHY_ANGLE, 10, KT_12) * DT
     expect(rider.landingQuality).toBe(TUNING.SKETCHY_QUALITY)
     expect(rider.phase).toBe(PHASE.LANDING)
-    expect(rider.speed).toBeCloseTo(10 * (1 - TUNING.SKETCHY_SPEED_LOSS), 6)
+    expect(rider.speed).toBeCloseTo(entry * (1 - TUNING.SKETCHY_SPEED_LOSS), 6)
   })
 
   it('takes all the speed on a wipeout (spec §7.2)', () => {
@@ -884,8 +1186,9 @@ describe('steering (spec §5.2)', () => {
   it('keeps steering through a stall, and through the air', () => {
     const rider = atFullSpeed()
     const input = loadingAt(70.53)
-    const steps = Math.ceil(1 / TUNING.LOAD_RATE / DT) + Math.floor(TUNING.STALL_GRACE / DT) + 1
-    for (let i = 0; i < steps; i++) stepRider(rider, input, KT_35, DT)
+    stepToFullLoad(rider, input, KT_35)
+    const grace = Math.floor(TUNING.STALL_GRACE / DT) + 1
+    for (let i = 0; i < grace; i++) stepRider(rider, input, KT_35, DT)
     expect(rider.popForfeit).toBe(true)
 
     const zenith = loadingAt(0)
