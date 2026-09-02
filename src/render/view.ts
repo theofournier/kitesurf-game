@@ -5,7 +5,7 @@
 // one place and keeps every draw function a pure function of a plain struct.
 import { lineTension } from '../sim/kite.ts'
 import type { SimState } from '../sim/loop.ts'
-import { PHASE, type Phase } from '../sim/rider.ts'
+import { LAND_REASON, PHASE, type LandReason, type Phase } from '../sim/rider.ts'
 import type { Wave } from '../sim/world.ts'
 
 /** What a view holds before the first frame: no world, so no waves. */
@@ -36,6 +36,8 @@ export interface RenderView extends Snapshot {
   apex: number
   /** What the last touchdown scored, 0..1 (spec §3.7). */
   landingQuality: number
+  /** Why that touchdown was not clean, NONE when it was (spec §3.7). */
+  landingReason: LandReason
   /**
    * Touchdowns so far. The landing feedback fires on this changing rather than
    * on the phase, so a landing is reacted to exactly once even if two frames
@@ -73,6 +75,7 @@ export function createView(): RenderView {
     vSpeed: 0,
     apex: 0,
     landingQuality: 0,
+    landingReason: LAND_REASON.NONE,
     landings: 0,
     waves: NO_WAVES,
   }
@@ -120,6 +123,7 @@ export function interpolateView(
   view.vSpeed = state.rider.vSpeed
   view.apex = state.rider.apex
   view.landingQuality = state.rider.landingQuality
+  view.landingReason = state.rider.landingReason
   view.landings = state.rider.landings
   view.waves = state.world.waves
   view.tension = lineTension(view.kiteAngle, view.speed, view.wind)

@@ -15,6 +15,7 @@
 // spray is driven by a seeded Rng rather than Math.random, so a replay of the
 // same run draws the same frame — the same reasoning as the line tremble.
 import { TUNING } from '../config/tuning.ts'
+import { LAND_REASON, type LandReason } from '../sim/rider.ts'
 import { Rng } from '../sim/rng.ts'
 import type { Camera } from './camera.ts'
 import { PALETTE } from './palette.ts'
@@ -64,6 +65,27 @@ const CLEAN_LABEL = 'CLEAN'
 const SKETCHY_LABEL = 'SKETCHY'
 const WIPEOUT_LABEL = 'WIPEOUT'
 
+/**
+ * The reason line: what the sim's LandReason looks like to the player, in the
+ * words the tutorial would use rather than the ones the landing table does.
+ *
+ * Shown next to SKETCHY only. CLEAN has no reason, and a wipeout already reads
+ * as one thing gone wrong; sketchy is the verdict where the player is left
+ * asking which half of the row they missed.
+ */
+const REASON_LABEL: Record<LandReason, string> = {
+  [LAND_REASON.NONE]: '',
+  [LAND_REASON.KITE_HIGH]: 'KITE TOO HIGH',
+  [LAND_REASON.KITE_LOW]: 'KITE TOO LOW',
+  [LAND_REASON.HARD]: 'DOWN TOO FAST',
+}
+
+/** The reason sits beside the word: smaller, quieter, on the same baseline. */
+const REASON_PX = 14
+const REASON_FONT = `${REASON_PX}px system-ui, -apple-system, sans-serif`
+const REASON_GAP = 10
+const REASON_ALPHA = 0.75
+
 /** The clean-landing shockwave: a ring opening along the waterline. */
 const RING_R = 130
 const RING_WIDTH = 3
@@ -88,6 +110,8 @@ export interface Effects {
   seen: number
   /** The verdict being shown, 0..1 (spec §3.7). */
   quality: number
+  /** Why that verdict was not clean — the reason drawn beside the word. */
+  reason: LandReason
   /** Seconds left of the verdict wash and word. */
   flash: number
   /** Current shake amplitude, px, and the offset it produced this frame. */
@@ -104,6 +128,7 @@ export function createEffects(): Effects {
   return {
     seen: 0,
     quality: 0,
+    reason: LAND_REASON.NONE,
     flash: 0,
     shake: 0,
     shakeX: 0,
@@ -140,6 +165,12 @@ function verdictLabel(quality: number): string {
   return quality > 0 ? SKETCHY_LABEL : WIPEOUT_LABEL
 }
 
+/** The reason to draw beside the word: sketchy landings only, '' otherwise. */
+export function reasonLabel(quality: number, reason: LandReason): string {
+  if (isClean(quality) || quality <= 0) return ''
+  return REASON_LABEL[reason]
+}
+
 function sprayCount(quality: number): number {
   const asked = isClean(quality)
     ? TUNING.SPRAY_CLEAN
@@ -167,6 +198,7 @@ function land(fx: Effects, camera: Camera, view: RenderView): void {
 
   fx.seen = view.landings
   fx.quality = quality
+  fx.reason = view.landingReason
   fx.flash = TUNING.FLASH_TIME
   fx.shake = shakeFor(quality)
   fx.count = count
@@ -282,15 +314,32 @@ export function drawVerdict(
     ctx.stroke()
   }
 
+  const label = verdictLabel(fx.quality)
+  const reason = reasonLabel(fx.quality, fx.reason)
+  const y = camera.feetY - LABEL_RISE - LABEL_LIFT * (1 - fade)
+
   ctx.globalAlpha = fade
   ctx.fillStyle = color
   ctx.font = LABEL_FONT
-  ctx.textAlign = 'center'
-  ctx.fillText(
-    verdictLabel(fx.quality),
-    camera.anchorX,
-    camera.feetY - LABEL_RISE - LABEL_LIFT * (1 - fade),
-  )
+
+  if (reason === '') {
+    ctx.textAlign = 'center'
+    ctx.fillText(label, camera.anchorX, y)
+  } else {
+    // Word and reason are centred as one line rather than the word staying put
+    // and the reason hanging off it, so the verdict reads as a single phrase.
+    const labelWidth = ctx.measureText(label).width
+    ctx.font = REASON_FONT
+    const left = (labelWidth + REASON_GAP + ctx.measureText(reason).width) * 0.5
+
+    ctx.textAlign = 'left'
+    ctx.font = LABEL_FONT
+    ctx.fillText(label, camera.anchorX - left, y)
+
+    ctx.font = REASON_FONT
+    ctx.globalAlpha = fade * REASON_ALPHA
+    ctx.fillText(reason, camera.anchorX - left + labelWidth + REASON_GAP, y)
+  }
 
   ctx.globalAlpha = 1
 }

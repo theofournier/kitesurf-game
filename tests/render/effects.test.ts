@@ -7,12 +7,14 @@ import {
   drawAltitudeShadow,
   drawSpray,
   drawVerdict,
+  reasonLabel,
   updateEffects,
   verdictColor,
   type Effects,
 } from '../../src/render/effects.ts'
 import { PALETTE } from '../../src/render/palette.ts'
 import { createView, type RenderView } from '../../src/render/view.ts'
+import { LAND_REASON, type LandReason } from '../../src/sim/rider.ts'
 
 const W = 1200
 const H = 800
@@ -38,11 +40,19 @@ function recorder() {
   const fills: number[][] = []
   const styles: string[] = []
   const texts: string[] = []
+  const xs: number[] = []
   const noop = () => {}
+
+  // One px per character: enough for the layout to be checked without a font.
+  const CHAR_W = 1
 
   const ctx = {
     fillRect: (...args: number[]) => void fills.push(args),
-    fillText: (text: string) => void texts.push(text),
+    fillText: (text: string, x: number) => {
+      texts.push(text)
+      xs.push(x)
+    },
+    measureText: (text: string) => ({ width: text.length * CHAR_W }),
     ellipse: noop,
     beginPath: noop,
     fill: noop,
@@ -60,13 +70,18 @@ function recorder() {
     textAlign: 'left',
   }
 
-  return { ctx: ctx as unknown as CanvasRenderingContext2D, fills, styles, texts }
+  return { ctx: ctx as unknown as CanvasRenderingContext2D, fills, styles, texts, xs }
 }
 
 /** Fires one landing of `quality` and returns the effects state it produced. */
-function landed(quality: number, fx: Effects = createEffects()) {
+function landed(
+  quality: number,
+  fx: Effects = createEffects(),
+  reason: LandReason = LAND_REASON.NONE,
+) {
   const view = frameView()
   view.landingQuality = quality
+  view.landingReason = reason
   view.landings = fx.seen + 1
 
   updateEffects(fx, frameCamera(), view, FRAME)
@@ -211,6 +226,50 @@ describe('landing feedback, drawn', () => {
       expect(texts).toEqual([word])
       expect(styles).toContain(verdictColor(quality))
     }
+  })
+
+  it('says why a sketchy landing was sketchy, beside the word', () => {
+    const { fx, view } = landed(SKETCHY, createEffects(), LAND_REASON.KITE_HIGH)
+    const { ctx, texts, xs } = recorder()
+
+    drawVerdict(ctx, frameCamera(), view, fx)
+
+    expect(texts).toEqual(['SKETCHY', reasonLabel(SKETCHY, LAND_REASON.KITE_HIGH)])
+    expect(texts[1]).not.toBe('')
+    // Beside it, not under it: the reason starts to the right of the word.
+    expect(xs[1]).toBeGreaterThan(xs[0])
+  })
+
+  it('gives every reason its own words', () => {
+    const words = new Set<string>()
+    for (const reason of [LAND_REASON.KITE_HIGH, LAND_REASON.KITE_LOW, LAND_REASON.HARD]) {
+      words.add(reasonLabel(SKETCHY, reason))
+    }
+    expect(words.size).toBe(3)
+    expect(words).not.toContain('')
+  })
+
+  it('draws the word alone on a clean landing and a wipeout', () => {
+    for (const quality of [CLEAN, WIPEOUT]) {
+      const { fx, view } = landed(quality, createEffects(), LAND_REASON.KITE_HIGH)
+      const { ctx, texts } = recorder()
+
+      drawVerdict(ctx, frameCamera(), view, fx)
+      expect(texts).toHaveLength(1)
+    }
+  })
+
+  it('centres the word and its reason as one line', () => {
+    const { fx, view } = landed(SKETCHY, createEffects(), LAND_REASON.HARD)
+    const camera = frameCamera()
+    const { ctx, texts, xs } = recorder()
+
+    drawVerdict(ctx, camera, view, fx)
+
+    // The recorder measures one px per character, so the line runs from the
+    // first x to the end of the second word.
+    const end = xs[1] + texts[1].length
+    expect((xs[0] + end) * 0.5).toBeCloseTo(camera.anchorX, 6)
   })
 
   it('washes the whole frame in the verdict colour', () => {

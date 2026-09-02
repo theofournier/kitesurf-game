@@ -12,7 +12,9 @@ import {
   drag,
   driveAccel,
   floatAccel,
+  LAND_REASON,
   landingQuality,
+  landingReason,
   loadRate,
   peakHeight,
   popImpulse,
@@ -777,6 +779,30 @@ describe('landing table (spec §3.7)', () => {
     expect(landingQuality(theta, descent, REF_APEX)).toBe(expected)
   })
 
+  /** Why each of those rows was not clean — same inputs, same order. */
+  const reasons: [string, number, number, string][] = [
+    // [name, kite angle at touchdown, descent rate, landingReason] — all at REF_APEX
+    ['clean landings have no reason', 55, SOFT - 1, LAND_REASON.NONE],
+    ['kite still up toward zenith', SKETCHY_LO, 1, LAND_REASON.KITE_HIGH],
+    ['kite dumped out toward the edge', SKETCHY_HI, 1, LAND_REASON.KITE_LOW],
+    ['in band, down too fast', 55, SOFT, LAND_REASON.HARD],
+    ['a wipeout gets the same reason a sketchy landing would', 55, HARD + 10, LAND_REASON.HARD],
+    ['the kite comes first when both missed', SKETCHY_LO, HARD + 10, LAND_REASON.KITE_HIGH],
+  ]
+
+  it.each(reasons)('%s', (_name, theta, descent, expected) => {
+    expect(landingReason(theta, descent, REF_APEX)).toBe(expected)
+  })
+
+  it('gives a reason to exactly the landings that were not clean', () => {
+    for (const theta of [0, SKETCHY_LO, CLEAN_LO, 55, CLEAN_HI, SKETCHY_HI, 90]) {
+      for (const descent of [0, SOFT - 0.1, SOFT, HARD, HARD + 5]) {
+        const clean = landingQuality(theta, descent, REF_APEX) === TUNING.CLEAN_QUALITY
+        expect(landingReason(theta, descent, REF_APEX) === LAND_REASON.NONE).toBe(clean)
+      }
+    }
+  })
+
   it('is SOFT_LAND itself on the air the constants are written for', () => {
     // LAND_FORGIVE blends between the flat threshold and the ballistic descent,
     // so where the two agree the blend has to return them both.
@@ -845,6 +871,7 @@ describe('landing table (spec §3.7)', () => {
 
       expect(rider.airborne).toBe(false)
       expect(rider.landingQuality).toBe(landingQuality(theta, rider.descentRate, REF_APEX))
+      expect(rider.landingReason).toBe(landingReason(theta, rider.descentRate, REF_APEX))
     }
   })
 })

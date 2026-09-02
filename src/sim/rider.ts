@@ -47,6 +47,29 @@ export const PHASE = {
 
 export type Phase = (typeof PHASE)[keyof typeof PHASE]
 
+/**
+ * Why a touchdown missed the clean row (spec §3.7). Strings for the same reason
+ * the phases are: they go straight into the debug readout and into test
+ * failure messages, and reading one out of this object allocates nothing.
+ *
+ * A landing misses on the kite angle, on the descent, or on both, and the
+ * feedback only has room for one word — so these name the kite first. It is
+ * where the player's hands were in the last half second, while the descent is
+ * what the whole air already decided.
+ */
+export const LAND_REASON = {
+  /** Nothing missed: the landing was clean. */
+  NONE: 'NONE',
+  /** Kite still up toward zenith, below the clean band — nothing pulling. */
+  KITE_HIGH: 'KITE_HIGH',
+  /** Kite dumped out toward the edge of the window, past the clean band. */
+  KITE_LOW: 'KITE_LOW',
+  /** Kite where it should be, but down faster than the air's budget allowed. */
+  HARD: 'HARD',
+} as const
+
+export type LandReason = (typeof LAND_REASON)[keyof typeof LAND_REASON]
+
 export interface RiderState {
   kite: KiteState
   /** Horizontal speed, m/s. Held in 0..MAX_SPEED (spec §3.1). */
@@ -94,6 +117,8 @@ export interface RiderState {
   descentRate: number
   /** What the last touchdown was worth, 0..1 (spec §3.7). */
   landingQuality: number
+  /** Why that touchdown was not clean, NONE when it was (spec §3.7). */
+  landingReason: LandReason
   /**
    * Touchdowns evaluated so far. Every air increments it exactly once, which is
    * both the guarantee the landing table is applied once and the edge the
@@ -123,6 +148,7 @@ export function createRiderState(): RiderState {
     airTime: 0,
     descentRate: 0,
     landingQuality: 0,
+    landingReason: LAND_REASON.NONE,
     landings: 0,
   }
 }
@@ -303,6 +329,22 @@ export function descentBudget(threshold: number, apex: number): number {
 }
 
 /**
+ * The clean row of the landing table (spec §3.7): kite inside the clean band
+ * and a descent inside the budget that apex allows.
+ *
+ * Stated once, because both what a landing is worth and why it was not clean
+ * are answers about this same condition, and two copies of it could drift into
+ * showing a reason for a landing that scored clean.
+ */
+function isClean(theta: number, descent: number, apex: number): boolean {
+  return (
+    theta >= TUNING.CLEAN_BAND[0] &&
+    theta <= TUNING.CLEAN_BAND[1] &&
+    descent < descentBudget(TUNING.SOFT_LAND, apex)
+  )
+}
+
+/**
  * The landing table (spec §3.7), evaluated at touchdown. Returns
  * `landingQuality`: 1.0 clean, 0.4 sketchy, 0 wipeout.
  *
@@ -324,11 +366,7 @@ export function descentBudget(threshold: number, apex: number): number {
  * calls this: a pop that made no height never left the water (§3.5).
  */
 export function landingQuality(theta: number, descent: number, apex: number): number {
-  if (
-    theta >= TUNING.CLEAN_BAND[0] &&
-    theta <= TUNING.CLEAN_BAND[1] &&
-    descent < descentBudget(TUNING.SOFT_LAND, apex)
-  ) {
+  if (isClean(theta, descent, apex)) {
     return TUNING.CLEAN_QUALITY
   }
 
@@ -341,6 +379,23 @@ export function landingQuality(theta: number, descent: number, apex: number): nu
   }
 
   return 0
+}
+
+/**
+ * Why a touchdown missed the clean row, for the same `(theta, descent, apex)`
+ * `landingQuality` grades (spec §3.7).
+ *
+ * The verdict alone says a landing was sketchy; this says which of the two
+ * things the clean row asks for was the one that was not there, so the player
+ * can tell "the kite was still overhead" from "that air was always going to
+ * hurt". Wipeouts get a reason on the same terms — a wipeout is a sketchy
+ * landing that also missed the wider row.
+ */
+export function landingReason(theta: number, descent: number, apex: number): LandReason {
+  if (isClean(theta, descent, apex)) return LAND_REASON.NONE
+  if (theta < TUNING.CLEAN_BAND[0]) return LAND_REASON.KITE_HIGH
+  if (theta > TUNING.CLEAN_BAND[1]) return LAND_REASON.KITE_LOW
+  return LAND_REASON.HARD
 }
 
 /**
@@ -428,6 +483,7 @@ function touchdown(rider: RiderState): void {
   rider.airborne = false
   rider.descentRate = descent
   rider.landingQuality = quality
+  rider.landingReason = landingReason(rider.kite.angle, descent, rider.apex)
   rider.landings += 1
 
   if (quality <= 0) {

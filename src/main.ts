@@ -2,7 +2,7 @@
 // panel. Wiring only — game logic lives in /src/sim and drawing in /src/render.
 import { createAnchor, createDesktopInput } from './input/desktop.ts'
 import { advance, createAccumulator, createInput, createSimState } from './sim/loop.ts'
-import { PHASE } from './sim/rider.ts'
+import { LAND_REASON, PHASE } from './sim/rider.ts'
 import { WIND_AUTO } from './sim/world.ts'
 import { createCamera, updateCamera } from './render/camera.ts'
 import { createEffects, updateEffects } from './render/effects.ts'
@@ -110,6 +110,7 @@ const readout = {
   airTime: 0,
   descent: 0,
   quality: 0,
+  reason: LAND_REASON.NONE as string,
   lastPop: 0,
   kicker: 1,
   lipDelta: 0,
@@ -168,6 +169,7 @@ function frame(now: number): void {
     readout.airTime = state.rider.airTime
     readout.descent = state.rider.descentRate
     readout.quality = state.rider.landingQuality
+    readout.reason = state.rider.landingReason
     readout.lastPop = state.rider.lastPop
     readout.kicker = state.rider.lastKicker
     readout.lipDelta = state.rider.lastLip
