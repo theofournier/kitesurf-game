@@ -32,7 +32,7 @@ export const TUNING = {
   POP_K: 9.5,
   FLAT_POP_CAP: 5.0,      // m
   GRAVITY: 9.81,
-  FLOAT_K: 1.6,           // ~15% hangtime swing
+  FLOAT_K: 2.0,           // ~15% hangtime swing
 
   // kicker
   KICKER_WINDOW: 0.30,    // s
@@ -49,7 +49,7 @@ export const TUNING = {
   SKETCHY_BAND: [20, 85],
   SOFT_LAND: 8,           // m/s descent
   HARD_LAND: 14,
-  LAND_FORGIVE: 0.8,      // 0 = flat descent cap, 1 = same demand at every apex
+  LAND_FORGIVE: 0.85,      // 0 = flat descent cap, 1 = same demand at every apex
   CLEAN_QUALITY: 1.0,     // landingQuality of a clean touchdown (spec §3.7)
   SKETCHY_QUALITY: 0.4,
   SKETCHY_SPEED_LOSS: 0.25, // share of speed a sketchy landing takes away
