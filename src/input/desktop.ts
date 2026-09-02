@@ -3,6 +3,7 @@
 // An adapter, nothing more: it writes the same two-field struct every other
 // platform writes, and holds no game logic of its own. The pointer→arc mapping
 // is exported separately so it can be tested without a DOM.
+import { CURSOR_CSS } from '../render/cursor.ts'
 import { WINDOW_MAX, WINDOW_MIN } from '../sim/kite.ts'
 import type { RiderInput } from '../sim/loop.ts'
 
@@ -54,8 +55,30 @@ export function axisFromOffset(dx: number, dyUp: number): number {
  *
  * `input` and `anchor` are owned by the caller and are never replaced, only
  * written — the loop reads the same object every frame and nothing allocates.
- * The system cursor is hidden for the life of the adapter; the arc's ghost
- * marker is the pointer now (spec §5.2).
+ *
+ * The system cursor stays visible, wearing the reticle from
+ * [render/cursor.ts](../render/cursor.ts), which is a deliberate
+ * departure from spec §5.2's "system cursor hidden". A send sweeps the hand
+ * from the edge of the window up to zenith, and hands overshoot: the pointer
+ * carries behind the rider, where the mapping clamps and the kite stops
+ * answering. With nothing drawn there — the ghost marker only lives on the arc
+ * — the player had no idea how far past the end their hand had gone, or which
+ * way to bring it back. The OS cursor is the one marker that is always on
+ * screen, including off the canvas entirely, and it is composited rather than
+ * drawn, so it costs the frame nothing. A reticle rather than an arrow: its
+ * hotspot is its own centre, which is what an aiming control wants. Its
+ * appearance is the one part of this adapter that is a drawn thing, so it lives
+ * with the rest of the drawing.
+ *
+ * It follows from that cursor that the pointer is tracked on `window` rather
+ * than on the canvas. The canvas fills the viewport, so a send that sweeps past
+ * zenith runs the pointer off the left edge — and the angle out there is a
+ * perfectly good angle, with a visible cursor sitting on it. Watching only the
+ * canvas made that a cliff: the position went unrecorded and the target snapped
+ * to an arc endpoint the hand had not asked for. Off the canvas is just another
+ * position now. Off the browser entirely reports nothing at all, so the target
+ * simply holds where the hand left it, which is what the cursor out there is
+ * still showing.
  */
 export function createDesktopInput(
   canvas: HTMLCanvasElement,
@@ -63,13 +86,18 @@ export function createDesktopInput(
   anchor: Anchor,
 ): DesktopInput {
   const previousCursor = canvas.style.cursor
-  canvas.style.cursor = 'none'
+  canvas.style.cursor = CURSOR_CSS
 
   // Last pointer position in CSS pixels, kept so the target can be recomputed
   // when the anchor moves under a still pointer — a resize, or the rider
   // rising in frame.
   let pointerX = 0
   let pointerY = 0
+  /**
+   * Whether a pointer has ever been seen. Only false before the first move:
+   * once there is a position it is never given up, because the alternative is
+   * inventing a target the hand did not ask for.
+   */
   let hasPointer = false
 
   /** True while the pop key or button is down. Either alone holds the load. */
@@ -89,13 +117,6 @@ export function createDesktopInput(
     pointerY = event.clientY
     hasPointer = true
     applyPointer()
-  }
-
-  function onPointerLeave(): void {
-    // Pointer off the canvas: clamp to the nearest arc endpoint and stay there
-    // rather than freezing mid-window on whatever the last sample was.
-    hasPointer = false
-    input.kiteTarget = input.kiteTarget < 0.5 ? 0 : 1
   }
 
   function setLoading(): void {
@@ -136,8 +157,7 @@ export function createDesktopInput(
     setLoading()
   }
 
-  canvas.addEventListener('pointermove', onPointerMove)
-  canvas.addEventListener('pointerleave', onPointerLeave)
+  window.addEventListener('pointermove', onPointerMove)
   canvas.addEventListener('pointerdown', onPointerDown)
   window.addEventListener('pointerup', onPointerUp)
   window.addEventListener('keydown', onKeyDown)
@@ -148,8 +168,7 @@ export function createDesktopInput(
     refresh: applyPointer,
 
     dispose(): void {
-      canvas.removeEventListener('pointermove', onPointerMove)
-      canvas.removeEventListener('pointerleave', onPointerLeave)
+      window.removeEventListener('pointermove', onPointerMove)
       canvas.removeEventListener('pointerdown', onPointerDown)
       window.removeEventListener('pointerup', onPointerUp)
       window.removeEventListener('keydown', onKeyDown)

@@ -29,6 +29,11 @@ export const PALETTE = {
   waveFoam: 'rgba(226, 244, 250, 0.92)',
   waveFoamWake: 'rgba(159, 242, 255, 0.96)',
   waveGuide: 'rgba(196, 230, 246, 0.20)',
+  // The pointer's aiming reticle (spec §5.2). It is on screen for the whole
+  // run, over sky and over water, so it carries its own dark halo — a light
+  // reticle alone disappears against the haze and a dark one against the sea.
+  cursor: '#e6eef2',
+  cursorHalo: '#08121a',
   /** Altitude shadow on the water, under the rider. */
   shadow: 'rgba(8, 18, 26, 0.45)',
   // The three landing verdicts (spec §3.7). Green, amber and red, because the
