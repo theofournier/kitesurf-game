@@ -51,8 +51,10 @@ reads in the loop.
     rng.ts      seeded mulberry32
     loop.ts     fixed-timestep accumulator, step()
   /input
+    axis.ts     the one screen-point → 0..1 mapping both adapters share
     desktop.ts  → RiderInput
     touch.ts    → RiderInput
+  /platform     the web shell of spec §5.4: orientation lock, audio unlock
   /render
     layers.ts   parallax
     draw*.ts

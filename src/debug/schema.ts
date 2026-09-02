@@ -263,6 +263,23 @@ export const TUNING_SCHEMA: TuningGroup[] = [
     ],
   },
   {
+    title: 'touch (spec §5.3)',
+    slots: [
+      // The 44px minimum in input/touch.ts is a floor under both of these, so
+      // dragging either slider down cannot make a target smaller than a thumb.
+      {
+        key: 'TOUCH_ARC_SLOP',
+        comment: 'px of hit slop either side of the window arc',
+        fields: [{ min: 0, max: 200, step: 1 }],
+      },
+      {
+        key: 'TOUCH_LOAD_ZONE',
+        comment: 'share of the width, ahead of the rider, that holds the load',
+        fields: [{ min: 0, max: 0.5 }],
+      },
+    ],
+  },
+  {
     title: 'generation',
     slots: [
       { key: 'REACTION_MIN', comment: 's' },

@@ -158,8 +158,11 @@ export function rampSpeed(height: number, speed: number): number {
  * learnable, narrow enough that hitting it is the skill peak of the game.
  */
 export function kickerBonus(max: number, delta: number): number {
-  const window = TUNING.KICKER_WINDOW
-  const t = (delta < 0 ? -delta : delta) / window
+  // Named `half` rather than `window`: shadowing a DOM global inside the sim
+  // reads as a mistake even when it is not, and the purity check in
+  // tests/sim/purity.test.ts has no way to tell the two apart.
+  const half = TUNING.KICKER_WINDOW
+  const t = (delta < 0 ? -delta : delta) / half
   if (!(t < 1)) return 1
   return 1 + (max - 1) * (1 - t * t)
 }

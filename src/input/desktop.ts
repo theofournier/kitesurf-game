@@ -1,53 +1,17 @@
 // Mouse and keyboard → RiderInput (spec §5.2).
 //
 // An adapter, nothing more: it writes the same two-field struct every other
-// platform writes, and holds no game logic of its own. The pointer→arc mapping
-// is exported separately so it can be tested without a DOM.
+// platform writes, and holds no game logic of its own. The point→arc mapping is
+// not here at all — it lives in [axis.ts](axis.ts), shared with touch, so the
+// two platforms cannot drift apart.
+import { axisFromPoint, type Anchor } from './axis.ts'
 import { CURSOR_CSS } from '../render/cursor.ts'
-import { WINDOW_MAX, WINDOW_MIN } from '../sim/kite.ts'
 import type { RiderInput } from '../sim/loop.ts'
-
-const RAD2DEG = 180 / Math.PI
-
-/** Where on screen the rider is, in CSS pixels, and which way it is riding. */
-export interface Anchor {
-  x: number
-  y: number
-  /** +1 riding right, -1 riding left — the world mirror of spec §6.5. */
-  facing: number
-}
 
 export interface DesktopInput {
   /** Recompute the target from the last pointer position. Call after a resize. */
   refresh(): void
   dispose(): void
-}
-
-export function createAnchor(): Anchor {
-  return { x: 0, y: 0, facing: 1 }
-}
-
-/**
- * Pointer offset from the rider → position along the window arc, 0..1.
- *
- * Absolute mapping, not pointer-lock deltas (spec §5.2): the angle from the
- * rider to the pointer *is* the kite position, so where your hand is on the
- * desk is where the kite is on the arc. Distance is ignored — only the angle
- * matters, since the kite orbits at a fixed radius (spec §6.2).
- *
- * `dx` is measured in the direction of travel and `dyUp` upward, so both are
- * positive toward the front of the window. Straight up is zenith (0), straight
- * ahead is the edge of the window (1), and anything outside the quarter — the
- * pointer behind the rider, or below the waterline — clamps to whichever end it
- * is nearest.
- */
-export function axisFromOffset(dx: number, dyUp: number): number {
-  // atan2(x, y) rather than the usual (y, x): the angle is measured from
-  // straight up, which is how the window is defined (spec §3.1).
-  const deg = Math.atan2(dx, dyUp) * RAD2DEG
-  if (!(deg > WINDOW_MIN)) return 0
-  if (deg >= WINDOW_MAX) return 1
-  return deg / WINDOW_MAX
 }
 
 /**
@@ -70,20 +34,30 @@ export function axisFromOffset(dx: number, dyUp: number): number {
  * appearance is the one part of this adapter that is a drawn thing, so it lives
  * with the rest of the drawing.
  *
- * It follows from that cursor that the pointer is tracked on `window` rather
- * than on the canvas. The canvas fills the viewport, so a send that sweeps past
- * zenith runs the pointer off the left edge — and the angle out there is a
- * perfectly good angle, with a visible cursor sitting on it. Watching only the
- * canvas made that a cliff: the position went unrecorded and the target snapped
- * to an arc endpoint the hand had not asked for. Off the canvas is just another
- * position now. Off the browser entirely reports nothing at all, so the target
- * simply holds where the hand left it, which is what the cursor out there is
- * still showing.
+ * It follows from that cursor that the pointer is tracked on `scope` — the
+ * window — rather than on the canvas. The canvas fills the viewport, so a send
+ * that sweeps past zenith runs the pointer off the left edge — and the angle
+ * out there is a perfectly good angle, with a visible cursor sitting on it.
+ * Watching only the canvas made that a cliff: the position went unrecorded and
+ * the target snapped to an arc endpoint the hand had not asked for. Off the
+ * canvas is just another position now. Off the browser entirely reports nothing
+ * at all, so the target simply holds where the hand left it, which is what the
+ * cursor out there is still showing.
+ *
+ * Pointer events arrive here for fingers too, and those belong to the touch
+ * adapter: they are dropped on sight, so both adapters can be live at once on a
+ * hybrid device without fighting over the same struct.
+ *
+ * `scope` is the window in the app and a stand-in under test — the only reason
+ * it is a parameter is that an adapter which reaches for a global cannot be
+ * driven headless, and the parity test in tests/input/parity.test.ts has to
+ * drive this one for real.
  */
 export function createDesktopInput(
   canvas: HTMLCanvasElement,
   input: RiderInput,
   anchor: Anchor,
+  scope: EventTarget = window,
 ): DesktopInput {
   const previousCursor = canvas.style.cursor
   canvas.style.cursor = CURSOR_CSS
@@ -107,12 +81,11 @@ export function createDesktopInput(
   function applyPointer(): void {
     if (!hasPointer) return
     const rect = canvas.getBoundingClientRect()
-    const dx = (pointerX - rect.left - anchor.x) * anchor.facing
-    const dyUp = anchor.y - (pointerY - rect.top)
-    input.kiteTarget = axisFromOffset(dx, dyUp)
+    input.kiteTarget = axisFromPoint(anchor, pointerX - rect.left, pointerY - rect.top)
   }
 
   function onPointerMove(event: PointerEvent): void {
+    if (event.pointerType === 'touch') return
     pointerX = event.clientX
     pointerY = event.clientY
     hasPointer = true
@@ -124,13 +97,13 @@ export function createDesktopInput(
   }
 
   function onPointerDown(event: PointerEvent): void {
-    if (event.button !== 0) return
+    if (event.pointerType === 'touch' || event.button !== 0) return
     buttonDown = true
     setLoading()
   }
 
   function onPointerUp(event: PointerEvent): void {
-    if (event.button !== 0) return
+    if (event.pointerType === 'touch' || event.button !== 0) return
     buttonDown = false
     setLoading()
   }
@@ -157,23 +130,31 @@ export function createDesktopInput(
     setLoading()
   }
 
-  window.addEventListener('pointermove', onPointerMove)
-  canvas.addEventListener('pointerdown', onPointerDown)
-  window.addEventListener('pointerup', onPointerUp)
-  window.addEventListener('keydown', onKeyDown)
-  window.addEventListener('keyup', onKeyUp)
-  window.addEventListener('blur', onBlur)
+  // Cast at the boundary: addEventListener is typed by event name on Window but
+  // not on the bare EventTarget the test passes in.
+  const move = onPointerMove as EventListener
+  const down = onPointerDown as EventListener
+  const up = onPointerUp as EventListener
+  const keyPress = onKeyDown as EventListener
+  const keyRelease = onKeyUp as EventListener
+
+  scope.addEventListener('pointermove', move)
+  canvas.addEventListener('pointerdown', down)
+  scope.addEventListener('pointerup', up)
+  scope.addEventListener('keydown', keyPress)
+  scope.addEventListener('keyup', keyRelease)
+  scope.addEventListener('blur', onBlur)
 
   return {
     refresh: applyPointer,
 
     dispose(): void {
-      window.removeEventListener('pointermove', onPointerMove)
-      canvas.removeEventListener('pointerdown', onPointerDown)
-      window.removeEventListener('pointerup', onPointerUp)
-      window.removeEventListener('keydown', onKeyDown)
-      window.removeEventListener('keyup', onKeyUp)
-      window.removeEventListener('blur', onBlur)
+      scope.removeEventListener('pointermove', move)
+      canvas.removeEventListener('pointerdown', down)
+      scope.removeEventListener('pointerup', up)
+      scope.removeEventListener('keydown', keyPress)
+      scope.removeEventListener('keyup', keyRelease)
+      scope.removeEventListener('blur', onBlur)
       canvas.style.cursor = previousCursor
     },
   }

@@ -1,34 +1,98 @@
-import { describe, expect, it } from 'vitest'
-import { axisFromOffset } from '../../src/input/desktop.ts'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { createAnchor, axisFromPoint } from '../../src/input/axis.ts'
+import { createDesktopInput, type DesktopInput } from '../../src/input/desktop.ts'
+import { createInput, type RiderInput } from '../../src/sim/loop.ts'
+import { createFakeCanvas, keyEvent, pointerEvent, type FakeCanvas } from './fakeDom.ts'
 
-describe('axisFromOffset', () => {
-  it('maps straight up to zenith and straight ahead to the window edge', () => {
-    expect(axisFromOffset(0, 100)).toBe(0)
-    expect(axisFromOffset(100, 0)).toBe(1)
+const WIDTH = 800
+const HEIGHT = 400
+
+describe('createDesktopInput', () => {
+  let canvas: FakeCanvas
+  let scope: EventTarget
+  let input: RiderInput
+  let adapter: DesktopInput
+  const anchor = createAnchor()
+
+  beforeEach(() => {
+    canvas = createFakeCanvas(WIDTH, HEIGHT)
+    scope = new EventTarget()
+    input = createInput()
+    anchor.x = 160
+    anchor.y = 258
+    anchor.facing = 1
+    adapter = createDesktopInput(canvas, input, anchor, scope)
   })
 
-  it('is an absolute mapping: the pointer angle is the kite position', () => {
-    expect(axisFromOffset(100, 100)).toBeCloseTo(0.5, 10)
-    expect(axisFromOffset(1, Math.sqrt(3))).toBeCloseTo(30 / 90, 10)
+  function move(clientX: number, clientY: number, pointerType = 'mouse'): void {
+    scope.dispatchEvent(pointerEvent('pointermove', { clientX, clientY, pointerType }))
+  }
+
+  it('writes the shared mapping into kiteTarget on every move', () => {
+    move(360, 58)
+    expect(input.kiteTarget).toBe(axisFromPoint(anchor, 360, 58))
+    move(460, 258)
+    expect(input.kiteTarget).toBe(1)
   })
 
-  it('ignores distance, because the kite orbits at a fixed radius', () => {
-    expect(axisFromOffset(5, 5)).toBeCloseTo(axisFromOffset(5000, 5000), 10)
+  it('invents no target before the first move', () => {
+    adapter.refresh()
+    expect(input.kiteTarget).toBe(0)
   })
 
-  it('clamps to the nearest endpoint outside the quarter', () => {
-    expect(axisFromOffset(-200, 100)).toBe(0) // behind the rider
-    expect(axisFromOffset(-200, -100)).toBe(0) // behind and below
-    expect(axisFromOffset(200, -100)).toBe(1) // ahead, below the waterline
+  it('holds the last angle when the pointer stops reporting', () => {
+    move(360, 58)
+    const held = input.kiteTarget
+    scope.dispatchEvent(new Event('blur'))
+    expect(input.kiteTarget).toBe(held)
   })
 
-  it('holds the axis inside 0..1 for any offset', () => {
-    for (let dx = -300; dx <= 300; dx += 17) {
-      for (let dy = -300; dy <= 300; dy += 17) {
-        const axis = axisFromOffset(dx, dy)
-        expect(axis).toBeGreaterThanOrEqual(0)
-        expect(axis).toBeLessThanOrEqual(1)
-      }
-    }
+  it('recomputes from the same pointer when the anchor moves under it', () => {
+    move(360, 58)
+    anchor.y = 158
+    adapter.refresh()
+    expect(input.kiteTarget).toBe(axisFromPoint(anchor, 360, 58))
+  })
+
+  it('loads on either the left button or space, and holds while either is down', () => {
+    canvas.dispatchEvent(pointerEvent('pointerdown', { button: 0 }))
+    expect(input.loading).toBe(true)
+    scope.dispatchEvent(keyEvent('keydown', 'Space'))
+    scope.dispatchEvent(pointerEvent('pointerup', { button: 0 }))
+    expect(input.loading).toBe(true)
+    scope.dispatchEvent(keyEvent('keyup', 'Space'))
+    expect(input.loading).toBe(false)
+  })
+
+  it('ignores other buttons and other keys', () => {
+    canvas.dispatchEvent(pointerEvent('pointerdown', { button: 2 }))
+    scope.dispatchEvent(keyEvent('keydown', 'KeyW'))
+    expect(input.loading).toBe(false)
+  })
+
+  it('releases a held load when the tab loses focus', () => {
+    scope.dispatchEvent(keyEvent('keydown', 'Space'))
+    expect(input.loading).toBe(true)
+    scope.dispatchEvent(new Event('blur'))
+    expect(input.loading).toBe(false)
+  })
+
+  it('leaves finger pointers to the touch adapter', () => {
+    move(360, 58)
+    const held = input.kiteTarget
+    move(460, 258, 'touch')
+    canvas.dispatchEvent(pointerEvent('pointerdown', { pointerType: 'touch' }))
+    expect(input.kiteTarget).toBe(held)
+    expect(input.loading).toBe(false)
+  })
+
+  it('stops listening once disposed', () => {
+    move(360, 58)
+    const held = input.kiteTarget
+    adapter.dispose()
+    move(460, 258)
+    scope.dispatchEvent(keyEvent('keydown', 'Space'))
+    expect(input.kiteTarget).toBe(held)
+    expect(input.loading).toBe(false)
   })
 })

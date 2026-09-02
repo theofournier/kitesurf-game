@@ -1,6 +1,10 @@
 // Entry point: canvas surface, fixed-step loop, input adapter, optional debug
 // panel. Wiring only — game logic lives in /src/sim and drawing in /src/render.
-import { createAnchor, createDesktopInput } from './input/desktop.ts'
+import { createAnchor } from './input/axis.ts'
+import { createDesktopInput } from './input/desktop.ts'
+import { createTouchInput } from './input/touch.ts'
+import { unlockAudioOnFirstGesture } from './platform/audio.ts'
+import { lockLandscape } from './platform/orientation.ts'
 import { advance, createAccumulator, createInput, createSimState } from './sim/loop.ts'
 import { LAND_REASON, PHASE } from './sim/rider.ts'
 import { WIND_AUTO } from './sim/world.ts'
@@ -44,8 +48,16 @@ const effects = createEffects()
 let previous = createSnapshot()
 let pending = createSnapshot()
 
+/**
+ * Both adapters are live at once and write the same struct (spec §5.1). They do
+ * not overlap: the desktop one drops pointer events whose type is 'touch' and
+ * the touch one takes only those, so a laptop with a touchscreen answers to
+ * whichever the player reaches for without either adapter knowing the other
+ * exists.
+ */
 const anchor = createAnchor()
 const desktop = createDesktopInput(canvas, input, anchor)
+const touch = createTouchInput(canvas, input, anchor)
 
 function resize(): void {
   const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR)
@@ -66,6 +78,7 @@ function resize(): void {
   // The rider moved under a pointer that did not: the target angle is measured
   // from the anchor, so it has to be recomputed from the same pointer position.
   desktop.refresh()
+  touch.refresh()
 }
 
 // devicePixelRatio changes without the CSS size changing when a window moves
@@ -184,6 +197,13 @@ function frame(now: number): void {
 new ResizeObserver(resize).observe(canvas)
 resize()
 watchDpr()
+
+// Spec §5.4. The lock is best-effort — the rotate prompt in index.html is the
+// half that always works — and the audio context can only be opened from inside
+// a gesture, so the first one the player makes is the one that opens it.
+lockLandscape()
+unlockAudioOnFirstGesture(window)
+
 requestAnimationFrame(frame)
 
 if (debugEnabled) {

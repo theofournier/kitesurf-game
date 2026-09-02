@@ -379,6 +379,36 @@ the parallax.
 
 ---
 
+## Touch
+
+| Param | Value | Meaning |
+|---|---|---|
+| `TOUCH_ARC_SLOP` | 90 px | Hit slop either side of the window arc, for the steering thumb |
+| `TOUCH_LOAD_ZONE` | 0.333 | Share of the width, ahead of the rider, that holds the load |
+
+Both are read by [touch.ts](src/input/touch.ts) and only decide *which role a finger
+claims* on touchdown — neither touches the mapping. Once a thumb has claimed the arc it
+is followed anywhere on screen by the same absolute angle mapping the mouse uses, so
+widening the slop makes the control easier to grab, never less precise.
+
+`TOUCH_ARC_SLOP` is a half-thickness: the default gives a band 180px through, centred on
+`LINE_RADIUS`. It is genuinely load-bearing rather than a nicety. On a phone in landscape
+the arc's 264px radius is most of the screen height, so zenith sits above the top edge:
+at 360px tall the reachable strip for a full send is the top ~55px of the frame. Widening
+the slop pulls the inner edge of the band down toward the rider and makes that send
+easier to start; narrowing it demands the thumb trace the drawn line. **This is the value
+to reach for first if the phone test says the send is awkward.**
+
+`TOUCH_LOAD_ZONE` is the spec's "right third" (§5.3) — the third *ahead* of the rider, so
+it mirrors with the frame when riding left. A hold anywhere inside it loads; nothing in
+there is a target the player has to find.
+
+Both are floored at the 44px minimum touch target by `MIN_TARGET` in
+[touch.ts](src/input/touch.ts), which is not a tuning value: it is an ergonomic
+minimum, so dragging either slider down cannot produce a target smaller than a thumb.
+
+---
+
 ## Generation
 
 | Param | Value | Meaning |

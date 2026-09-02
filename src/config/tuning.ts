@@ -93,6 +93,10 @@ export const TUNING = {
   FLASH_TIME: 0.9,        // s the landing verdict holds on screen
   SHADOW_FADE_M: 14,      // m of altitude over which the water shadow fades out
 
+  // touch (spec §5.3)
+  TOUCH_ARC_SLOP: 90,     // px of hit slop either side of the window arc
+  TOUCH_LOAD_ZONE: 0.333,  // share of the width, ahead of the rider, that holds the load
+
   // generation
   REACTION_MIN: 0.55,     // s
   WAVE_GAP_MIN: 55,       // m between one lip and the next
