@@ -203,8 +203,8 @@ interface RiderInput {
 
 - **Steering is always on. No button.** Kite position is the speed dial and must be live every frame.
 - Mouse position → angle from rider to pointer → clamped to the window arc → `kiteTarget`. Absolute mapping, not pointer-lock deltas, so hand position corresponds to kite position.
-- Pointer leaves canvas → clamp to nearest arc endpoint.
-- System cursor hidden; a faint ghost marker on the arc shows the target.
+- Pointer tracked across the whole window, on the canvas or off it. The angle is well defined outside the frame, and a send sweeps the hand past zenith and off the edge as a matter of course. **Never snap the target to an arc endpoint** — that reads as the kite ignoring the hand. Off the browser entirely reports nothing, so the target holds the last angle it was given.
+- **System cursor visible, as a crosshair.** It is the only marker that survives leaving the canvas, and it is what tells the player how far past the end of the window a sweep has carried — hiding it made a long send unrecoverable, because the clamp ate the overshoot and nothing on screen said so. A faint ghost marker on the arc shows the target the kite is being given.
 - **Space or LMB** → `loading`. Support both.
 
 ### 5.3 Mobile (two-thumb, landscape)
