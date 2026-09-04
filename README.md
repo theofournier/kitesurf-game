@@ -9,6 +9,11 @@ gives lift but no drive.** You cannot have both.
 
 Canvas 2D, TypeScript, Vite. No game engine, no physics library.
 
+New here? [HOW-TO-PLAY.md](HOW-TO-PLAY.md) is the player's guide: controls, the landing
+table, lip timing, the wind tiers and how a run is scored.
+
+![game 1](docs/game1.png)
+
 ## Getting started
 
 ```bash
