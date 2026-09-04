@@ -31,13 +31,10 @@ const KT_35 = 35
 /** The three wave types, in the order of the spec §4.1 table. */
 const TYPES: WaveType[] = [WAVE.CHOP, WAVE.WAVE, WAVE.WAKE]
 
-describe('windAt', () => {
-  it('is flat at tier 1 until the tier curve lands', () => {
-    for (const distance of [0, 100, 500, 1500, 3000, 12000]) {
-      expect(windAt(distance)).toBe(TUNING.WIND_BASE)
-    }
-  })
-
+// The curve itself is tested in tests/wind.test.ts, beside the rest of spec
+// §7.1. What matters here is only that the world reads it: the override wins at
+// every distance, so a fixture can pin the wind its spawns are judged in.
+describe('windAt, as the generator sees it', () => {
   it('returns the override at every distance', () => {
     for (const distance of [0, 500, 3000]) {
       expect(windAt(distance, 25)).toBe(25)
@@ -581,6 +578,13 @@ describe('taking off from a wave', () => {
     const state = createSimState(9)
     const input = createInput()
     input.kiteTarget = DRIVE_PEAK / 90
+
+    // The lethal furniture is parked past every horizon. A rider cruising for
+    // half a minute without jumping meets a buoy sooner or later, and contact
+    // is now fatal (spec §7.2) — which would end this run before it ever got to
+    // a lip. What is under test is the kicker, not the obstacles.
+    state.world.obstacleX = 1e9
+    for (const obstacle of state.world.obstacles) obstacle.active = false
 
     for (let i = 0; i < 1500; i++) step(state, input, DT)
 

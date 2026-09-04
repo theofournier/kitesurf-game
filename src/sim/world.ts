@@ -19,38 +19,17 @@ import {
   type ObstacleType,
 } from './obstacles.ts'
 import { Rng } from './rng.ts'
+import { tierWind, WIND_AUTO, windAt } from './wind.ts'
 
 // The kicker struct and the three wave types live in kicker.ts so that rider.ts
 // can have them without importing the world (see the note there). They are part
 // of this module's surface all the same: a wave is what carries a kicker.
 export { createKicker, NO_KICKER, WAVE, type Kicker, type WaveType } from './kicker.ts'
 
-/**
- * Sentinel for "no override": take the wind from the curve. Zero is safe as a
- * sentinel because a run at 0kt is not a run — the kite does not fly.
- */
-export const WIND_AUTO = 0
-
-/**
- * Wind at a distance into the run, kt (spec §7.1).
- *
- * Wind rises with distance, never with time, so slowing down to farm is never
- * the optimal play. The tier curve is a later session; until then every run is
- * tier 1, which is the wind the whole tuning pass is done at.
- *
- * `override` forces a wind regardless of distance. It exists because
- * WIND_BASE cannot be turned into a wind by itself: it is the reference every
- * other wind is measured against, so `windPower` divides by it and `slewRate`
- * subtracts it, and a run held at exactly WIND_BASE is algebraically identical
- * at 12kt and at 35kt. Feeling tier 2–4 before the curve exists therefore needs
- * a second number, not a bigger WIND_BASE. It lives on SimState rather than in
- * a module variable so the sim stays a pure function of its state and a replay
- * still reproduces the run it recorded.
- */
-export function windAt(_distance: number, override: number = WIND_AUTO): number {
-  if (override > WIND_AUTO) return override
-  return TUNING.WIND_BASE
-}
+// The wind curve lives in wind.ts so that scoring.ts can price a jump by the
+// tier it was taken in without importing the sea it was taken off. It is part
+// of this module's surface all the same: the wind is what lays the sea out.
+export { tierAt, tierMult, WIND_AUTO, windAt } from './wind.ts'
 
 /**
  * How many waves can be in play at once. A pool bound, not a gameplay value —
@@ -279,16 +258,53 @@ function obstacleGap(rng: Rng, wind: number): number {
 }
 
 /**
+ * Whether the water is heavy enough to lay a pier in (spec §9.1: "rare, tier
+ * 3+").
+ *
+ * Two claims, and they are different ones. `clearable` is pure physics — can a
+ * pop in this wind get over 3m of wall at all — and it turns true at 19.1kt,
+ * which the curve reaches around 660m. That is the middle of tier 2, and a wall
+ * that can *only* be cleared by the single strongest line in the game is not
+ * what tier 2 is for. So the tier the spec asks for is asked for as well: not
+ * as a distance, but as the wind that tier opens at, which is the same thing
+ * under the curve (25kt is exactly 1500m) and the right thing under a wind
+ * override, where the tier table has no distance to speak of.
+ */
+function pierWater(wind: number): boolean {
+  return wind >= tierWind(TUNING.PIER_TIER) && clearable(OBSTACLE.PIER, wind)
+}
+
+/**
  * Which of the two free-standing obstacles the stream asks for next.
  *
- * A pier that this wind cannot clear is not rolled away and retried, it is
- * simply not a pier: the draw is spent either way, so what the wind allows
+ * A pier that this water cannot take is not rolled away and retried, it is
+ * simply not a pier: the draw is spent either way, so what the water allows
  * changes what comes out of the stream without changing the stream itself.
  */
 function rollObstacleType(rng: Rng, wind: number): ObstacleType {
   const roll = rng.next()
-  if (roll < TUNING.OBSTACLE_MIX_PIER && clearable(OBSTACLE.PIER, wind)) return OBSTACLE.PIER
+  if (roll < TUNING.OBSTACLE_MIX_PIER && pierWater(wind)) return OBSTACLE.PIER
   return OBSTACLE.BUOY
+}
+
+/**
+ * The wind a spawn's fairness is judged in, kt.
+ *
+ * Not the wind where the object stands, and not the rider's either: the wind at
+ * `clearX`, where the line to it starts. The fairness gate prices a whole line —
+ * spin up, build the edge, steer the kite, climb — and every one of those terms
+ * is cheaper in more wind. Wind rises with distance (spec §7.1), so the weakest
+ * wind anywhere on that approach is the wind at the beginning of it, and pricing
+ * the line there is the only reading that cannot promise a rider more pop than
+ * the water they are actually crossing will give them.
+ *
+ * It is a function of the world rather than of the rider for the same reason
+ * every other draw here is: the rider's own wind would make what the stream
+ * lays down depend on how far into a frame the generator happened to be called,
+ * which is the one thing a replay cannot survive.
+ */
+function gateWind(world: WorldState, override: number): number {
+  return windAt(world.clearX, override)
 }
 
 /**
@@ -326,7 +342,7 @@ function commitWave(world: WorldState, override: number): boolean {
   const lipX = world.spawnX
   const type = rollType(world.rng)
   initWave(world.waves[slot], lipX, type)
-  if (type === WAVE.WAKE) placeBoat(world, lipX, windAt(lipX, override))
+  if (type === WAVE.WAKE) placeBoat(world, lipX, gateWind(world, override))
 
   world.spawnX = lipX + world.rng.range(TUNING.WAVE_GAP_MIN, TUNING.WAVE_GAP_MAX)
   return true
@@ -340,20 +356,15 @@ function commitObstacle(world: WorldState, override: number): boolean {
   const slot = freeSlot(world.obstacles)
   if (slot < 0) return false
 
-  // The wind is read at the spawn's own position rather than at the rider's, so
-  // that what the stream lays down is a function of where it lays it down. The
-  // rider's own wind would make the world depend on how far into a frame the
-  // generator happened to be called, which is the one thing a replay cannot
-  // survive.
-  const wind = windAt(world.obstacleX, override)
+  const wind = gateWind(world, override)
   const type = rollObstacleType(world.rng, wind)
-  // Rolled where the candidate stood, placed where the gate allows. Wind only
-  // ever rises with distance, so a push can turn down a pier the far end of it
-  // would have allowed, and can never smuggle one into water too light for it.
+  // Rolled where the candidate stood, placed where the gate allows.
   const at = Math.max(world.obstacleX, earliestFair(world.clearX, type, wind))
 
   initObstacle(world.obstacles[slot], at, type)
   world.clearX = at + runout(type)
+  // The next gap is drawn in the wind where that obstacle stands: density is a
+  // property of the water it is laid in (spec §9.2), not of the line to it.
   world.obstacleX = at + obstacleGap(world.rng, windAt(at, override))
   return true
 }

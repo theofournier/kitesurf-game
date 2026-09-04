@@ -47,8 +47,50 @@ export interface TuningGroup {
  */
 export const TUNING_SCHEMA: TuningGroup[] = [
   {
-    title: 'wind',
-    slots: [{ key: 'WIND_BASE', comment: 'kt, tier 1 — the wind every other value scales from' }],
+    title: 'wind (spec §7.1)',
+    slots: [
+      { key: 'WIND_BASE', comment: 'kt, tier 1 — the wind every other value scales from' },
+      // The tier table of spec §7.1, one slider per column. The boundaries are
+      // distances into a run and the winds are the kt at each of them, so both
+      // are pinned to the range a run is actually played over rather than to a
+      // multiple of the shipped value.
+      {
+        key: 'TIER_DIST',
+        comment: 'm, where tiers 2, 3 and 4 begin',
+        fields: [
+          { label: 'TIER_DIST tier 2', min: 100, max: 4000, step: 10 },
+          { label: 'TIER_DIST tier 3', min: 100, max: 6000, step: 10 },
+          { label: 'TIER_DIST tier 4', min: 100, max: 9000, step: 10 },
+        ],
+      },
+      {
+        key: 'TIER_WIND',
+        comment: 'kt at the start of each of those tiers',
+        fields: [
+          { label: 'TIER_WIND tier 2', min: 6, max: 60, step: 0.5 },
+          { label: 'TIER_WIND tier 3', min: 6, max: 60, step: 0.5 },
+          { label: 'TIER_WIND tier 4', min: 6, max: 60, step: 0.5 },
+        ],
+      },
+      // A tier that paid less than 1x would score a run backwards for riding
+      // into worse water, which is the opposite of what the table is for.
+      {
+        key: 'TIER_MULT',
+        comment: 'score multiplier of each tier',
+        fields: [
+          { label: 'TIER_MULT tier 1', min: 1, max: 10 },
+          { label: 'TIER_MULT tier 2', min: 1, max: 10 },
+          { label: 'TIER_MULT tier 3', min: 1, max: 10 },
+          { label: 'TIER_MULT tier 4', min: 1, max: 10 },
+        ],
+      },
+      {
+        key: 'WIND_TOP',
+        comment: 'kt the open tier climbs toward and never reaches',
+        fields: [{ min: 6, max: 80, step: 0.5 }],
+      },
+      { key: 'WIND_TOP_M', comment: 'm past the last boundary that closes half of that gap' },
+    ],
   },
   {
     title: 'kite',
@@ -178,6 +220,19 @@ export const TUNING_SCHEMA: TuningGroup[] = [
       },
       { key: 'LAND_RECOVER', comment: 's, the landing beat before riding resumes' },
       { key: 'WIPEOUT_RECOVER', comment: 's, relaunch beat with the kite down (spec §7.2)' },
+      // The relaunch band is an arc of the window, like the landing bands, and
+      // the drag is a share of the flying slew rate. A drag of zero would be a
+      // kite that never comes back out of the water, so it stops short of it.
+      {
+        key: 'RELAUNCH_ANGLE',
+        comment: 'deg, how far out the kite has to be dragged to fly again',
+        fields: [{ min: 0, max: 90, step: 1 }],
+      },
+      {
+        key: 'RELAUNCH_SLEW',
+        comment: 'share of the slew rate a kite in the water drags at',
+        fields: [{ min: 0.05, max: 1 }],
+      },
     ],
   },
   {
@@ -322,6 +377,12 @@ export const TUNING_SCHEMA: TuningGroup[] = [
         key: 'OBSTACLE_MIX_PIER',
         comment: 'share of the non-boat obstacles that are piers, where the wind allows one',
         fields: [{ min: 0, max: 1 }],
+      },
+      // A tier index, so it moves in whole tiers over the range the table has.
+      {
+        key: 'PIER_TIER',
+        comment: 'first tier whose wind may carry a pier (spec §9.1)',
+        fields: [{ min: 1, max: 4, step: 1 }],
       },
     ],
   },

@@ -284,6 +284,8 @@ Wind scales with **distance, not time** — otherwise the optimal strategy is to
 
 Wind interpolates continuously; tiers exist for feedback and scoring. Each tier transition is an event: sky colour, water tint, spray density, audio.
 
+The wind in the table is the wind at the moment a tier **begins**, and the curve runs straight between one and the next — so tier 1 is a ride from 12kt to 18kt, and it is the boundary rather than the whole tier that is worth 18. Past the last boundary the curve keeps climbing but asymptotically, toward a ceiling it never reaches: tier 4 goes on getting harder for as long as a run lasts without eventually handing the physics a wind nothing was ever tuned at.
+
 Wind affects: `driveFactor` output, `liftFactor` output, `slewRate`, obstacle density, wave frequency.
 
 **Key consequence:** at high wind the kite pulls hard even at zenith, so parking it up there to send becomes genuinely dangerous. Difficulty comes from the core mechanic getting harder, not from density alone.
@@ -321,8 +323,17 @@ totalScore = Σ jumpScore + (distance * 1)
 
 ### 8.2 Combo
 
-- +1 per clean landing, cap 10×
-- Resets to 1× on wipeout
+Every trick landed off a kicker moves the combo one rung:
+
+| Landing | Combo |
+|---|---|
+| Clean | +1, cap 10× |
+| Sketchy | −1, floor 1× |
+| Wipeout | straight back to 1× |
+
+- **The jump is paid at the combo it was taken at**, and the combo moves afterwards — so the first clean landing of a run scores at 1× and the second at 2×.
+- **Sketchy costs a rung.** A landing that only just stayed on its feet should not be free for as long as it is not an outright wipeout, and a ladder that could only go up or all the way down would have nothing to say about the long middle of the landing table. The 10× has to be flown for the whole way up.
+- **Only kicker jumps move it, in either direction.** A flat-water hop scores at whatever combo is standing and neither builds it, holds it nor costs it — the pop is capped at `FLAT_POP_CAP` precisely so that flat water is never where the height is, and a combo that could be built on flat hops would be a combo about pressing the button rather than about reading the water. Chop is the commonest kicker so that the combo always has something to live on.
 - **Decays on distance without a landed trick** (−1 per 150m), not on a timer — same anti-stalling logic
 
 ### 8.3 Clearance bonus
@@ -339,7 +350,7 @@ Also extends the combo window. This gives obstacles a reason to exist beyond kil
 
 Displayed on the game-over screen alongside total score:
 
-- **Best jump** (metres)
+- **Best jump** (metres) — landed. An air the rider did not ride away from is not a jump they made, however high it went.
 - **Max distance** (metres)
 
 Both rendered as **in-world markers**, not HUD numbers:

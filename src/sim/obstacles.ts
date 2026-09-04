@@ -207,6 +207,60 @@ export function hits(
 }
 
 /**
+ * The smallest gap between the rider's path and the top of `obstacle`, m, over
+ * the stretch of it the path crosses — Infinity when the step passes nowhere
+ * near the object (spec §8.3).
+ *
+ * The near-miss half of `hits`, off the same swept path and the same silhouette:
+ * what `hits` calls contact is exactly this gap going negative, so the greedy
+ * line and the fatal one are measured by one piece of geometry rather than two
+ * that could drift apart.
+ */
+export function clearanceOver(
+  obstacle: Obstacle,
+  fromX: number,
+  fromAlt: number,
+  toX: number,
+  toAlt: number,
+): number {
+  if (!obstacle.active) return Infinity
+
+  let gap = lowestOver(fromX, fromAlt, toX, toAlt, obstacle.x, farEdge(obstacle)) - obstacle.height
+
+  if (obstacle.mastH > 0) {
+    const overMast =
+      lowestOver(fromX, fromAlt, toX, toAlt, obstacle.mastX, obstacle.mastX) - obstacle.mastH
+    if (overMast < gap) gap = overMast
+  }
+
+  return gap
+}
+
+/**
+ * The closest the step just taken came to the top of anything, m, or Infinity
+ * over open water.
+ *
+ * A query, like `hitObstacle`: what a near miss is worth is spec §8.3's
+ * business, and scoring.ts is where that lives.
+ */
+export function nearestClearance(
+  obstacles: readonly Obstacle[],
+  fromX: number,
+  fromAlt: number,
+  toX: number,
+  toAlt: number,
+): number {
+  let best = Infinity
+
+  for (let i = 0; i < obstacles.length; i++) {
+    const gap = clearanceOver(obstacles[i], fromX, fromAlt, toX, toAlt)
+    if (gap < best) best = gap
+  }
+
+  return best
+}
+
+/**
  * The first obstacle the step just taken ran into, or null for a clean pass.
  *
  * A query, not a verdict: what contact costs is spec §7.2's business, and the

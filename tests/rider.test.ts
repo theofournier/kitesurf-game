@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { TUNING } from '../src/config/tuning.ts'
-import { WINDOW_MAX, driveFactor, liftFactor, windPower } from '../src/sim/kite.ts'
+import { WINDOW_MAX, driveFactor, liftFactor, slewRate, windPower } from '../src/sim/kite.ts'
 import { DT, createInput, type RiderInput } from '../src/sim/loop.ts'
 import {
   PHASE,
@@ -578,18 +578,20 @@ describe('air (spec §3.6)', () => {
 
   /**
    * Spec §3.6 asks for a ~15% hangtime swing between a kite held at zenith and
-   * one dropped immediately. FLOAT_K = 1.6 does not produce that number under
-   * either honest reading of "dropped immediately":
+   * one dropped immediately, and the answer depends on what "dropped
+   * immediately" means. At FLOAT_K = 2.0 the two honest readings are:
    *
-   *   kite teleported to the window edge   →  20.5% (this test)
-   *   kite slewed there, as a thumb does   →   8.7% on a full-load tier-1 pop,
-   *                                            rising toward 20.5% as the air
-   *                                            gets longer and the ~1s of slew
-   *                                            matters less
+   *   kite teleported to the window edge   →  26.5% (this test)
+   *   kite slewed there, as a thumb does   →  11.7% on a full-load tier-1 pop,
+   *                                           rising toward 26.5% as the air
+   *                                           gets longer and the ~1s of slew
+   *                                           matters less
    *
-   * FLOAT_K would have to be ~1.28 to land the first reading on 15%. The value
-   * is the human's, so this stays marked as a known conflict rather than being
-   * tuned to fit — see the session-5 report.
+   * So the spec's number now sits between them: FLOAT_K would have to be ~1.15
+   * to land the teleported reading on 15% and ~2.34 to land the slewed one
+   * there, and 2.0 is nearer the second. The conflict is no longer "the value
+   * is wrong" but "the spec does not say which of the two it means", so this
+   * stays marked rather than tuned to fit — the value is the human's.
    */
   it.fails('extends hangtime by 15% ±3% versus dropping the kite (spec §3.6)', () => {
     const held = fly(1, 0, KT_12, 0, true)
@@ -603,12 +605,13 @@ describe('air (spec §3.6)', () => {
   it('swings hangtime by the amount FLOAT_K currently buys, in the same direction', () => {
     // The characterisation half of the test above: the shape of the mechanic is
     // right and this pins the number, so tuning FLOAT_K is a visible change.
+    // It has been: the band was 18–23% at FLOAT_K = 1.6 and is 24–29% at 2.0.
     const held = fly(1, 0, KT_12, 0, true)
     const dropped = fly(1, 0, KT_12, WINDOW_MAX, true)
     const swing = held.hangtime / dropped.hangtime - 1
 
-    expect(swing).toBeGreaterThan(0.18)
-    expect(swing).toBeLessThan(0.23)
+    expect(swing).toBeGreaterThan(0.24)
+    expect(swing).toBeLessThan(0.29)
 
     // The float is a hangtime modifier, not a second engine: the ideal
     // no-float flight is 2v/g and the held one is 2v over what is left of g.
@@ -923,13 +926,21 @@ describe('landing a kicker air (spec §3.7, §4)', () => {
     expect(rider.landingQuality).toBe(TUNING.CLEAN_QUALITY)
   })
 
-  it('still wipes that air out for dropping the kite early', () => {
-    // Same pop, same wind, kite dumped low and early: the float is spent going
-    // up instead of coming down, and the descent blows the budget its own apex
-    // set. The size of the send is landable; flying it badly is not.
-    const rider = sendAndLand(kickerImpulse(KT_35, TUNING.BONUS_WAKE), KT_35, 55, 0.6)
+  it('still wipes that air out for flying it down on a kite out of the lift', () => {
+    // Same pop, same wind, flown down with the kite at 70deg instead of 35: the
+    // float is spent going up instead of coming down, and the descent blows the
+    // budget its own apex set. The size of the send is landable; flying it
+    // badly is not.
+    //
+    // The kite is inside CLEAN_BAND at touchdown and the landing is still lost,
+    // which is the point of `descentBudget`: what the table grades on an air
+    // this size is not where the kite ended up but how much lift it was
+    // carrying on the way down (`liftFactor` is 0.74 at 35deg and 0.20 at 70).
+    const rider = sendAndLand(kickerImpulse(KT_35, TUNING.BONUS_WAKE), KT_35, 70, 0.6)
 
     expect(rider.apex).toBeGreaterThan(40)
+    expect(rider.kite.angle).toBeLessThan(TUNING.CLEAN_BAND[1])
+    expect(rider.landingReason).toBe(LAND_REASON.HARD)
     expect(rider.landingQuality).toBe(0)
     expect(rider.phase).toBe(PHASE.WIPEOUT)
   })
@@ -968,25 +979,39 @@ describe('landing a kicker air (spec §3.7, §4)', () => {
     }
   })
 
-  it('makes none of them free, except the one bind at 12kt', () => {
+  it('makes none of them free', () => {
+    // Every kicker at every tier has a way of being flown that scores less than
+    // its best — the flip side of the test above, and together they say that
+    // the verdict is earned rather than handed out.
+    //
+    // This had one exception at FLOAT_K = 1.6: a 7m air at 12kt was sketchy
+    // however it was flown, because the redirect that would buy the descent
+    // budget could not also reach CLEAN_BAND inside so short an air. The
+    // exception was pinned here "so tuning that opens it up says so", and
+    // FLOAT_K = 2.0 opened it up — a 12kt wave hit now has a clean line in it.
     for (const wind of [KT_12, 20, KT_35]) {
       for (const [name, bonus] of KICKERS) {
-        // A 7m air at 12kt is the one place the verdict does not move: BASE_SLEW
-        // is 90deg/s there, and the air is short, so the redirect that would
-        // buy the descent budget cannot also reach CLEAN_BAND in time. Every way
-        // of flying it is sketchy — landable, never nailed, never lost. Pinned
-        // here rather than left silent, so tuning that opens it up says so.
-        if (wind === KT_12 && name === 'wave') {
-          const { best, worst } = spread(wind, bonus)
-          expect(best).toBe(TUNING.SKETCHY_QUALITY)
-          expect(worst).toBe(TUNING.SKETCHY_QUALITY)
-          continue
-        }
-
         const { best, worst } = spread(wind, bonus)
-        expect(worst).toBeLessThan(best)
+        expect(worst, `${wind}kt ${name}`).toBeLessThan(best)
       }
     }
+  })
+
+  it('leaves the biggest kicker at tier 1 landable, and never nailable', () => {
+    // Where the bind went instead. The clean budget grows like apex^0.425 and
+    // the descent it is measured against like apex^0.5, so every larger send
+    // asks for more of the float to be kept for the way down — and a boat wake
+    // taken at 12kt is a bigger send than 12kt has the float to fly down.
+    //
+    // Which is the right shape for it. At tier 1 the biggest kicker in the game
+    // is something to be got away with; taking the same wake to tier 4, where
+    // there is nearly three times the float in the descent, is what turns it
+    // into something to be nailed (§4.4, §7.1).
+    const { best, worst } = spread(KT_12, TUNING.BONUS_WAKE)
+
+    expect(best).toBe(TUNING.SKETCHY_QUALITY)
+    expect(worst).toBe(0)
+    expect(spread(KT_35, TUNING.BONUS_WAKE).best).toBe(TUNING.CLEAN_QUALITY)
   })
 })
 
@@ -1038,14 +1063,17 @@ describe('landing consequences (spec §3.7, §7.2)', () => {
     expect(rider.load).toBe(0)
   })
 
-  it('holds the rider still through the relaunch beat, then rides again', () => {
-    const rider = land(0, 2, 10)
-    const held = loadingAt(50)
-
-    // The kite is in the water: no drive to be had and no edge to load, for as
-    // long as the beat lasts.
+  /**
+   * Steers a downed kite at `target` degrees until it flies again, and reports
+   * how long the relaunch took. Everything is asserted from inside the beat:
+   * the kite is in the water, so there is no drive to be had, no edge to load
+   * and no ground covered, however hard the player holds the input.
+   */
+  function relaunch(rider: RiderState, target: number, cap = 600) {
+    const held = loadingAt(target)
     let steps = 0
-    while (rider.phase === PHASE.WIPEOUT && steps < 600) {
+
+    while (rider.phase === PHASE.WIPEOUT && steps < cap) {
       expect(rider.speed).toBe(0)
       expect(rider.load).toBe(0)
       expect(rider.x).toBe(0)
@@ -1053,11 +1081,57 @@ describe('landing consequences (spec §3.7, §7.2)', () => {
       steps++
     }
 
-    expect(steps * DT).toBeCloseTo(TUNING.WIPEOUT_RECOVER, 1)
-    expect(rider.phase).toBe(PHASE.LOADING)
+    return steps * DT
+  }
 
-    for (let i = 0; i < 60; i++) stepRider(rider, held, KT_12, DT)
+  it('holds the rider still through the relaunch beat, then rides again', () => {
+    // Spec §7.2: the kite is down in the water, the player steers it back to
+    // the edge of the window, and the whole beat is about two seconds. The
+    // wipeout below parks it at zenith — the far end of the window and the
+    // longest drag the game can ask for — so this is the slow case.
+    const rider = land(0, 2, 10)
+    const beat = relaunch(rider, WINDOW_MAX)
+
+    expect(beat).toBeGreaterThanOrEqual(TUNING.WIPEOUT_RECOVER)
+    expect(beat).toBeLessThan(TUNING.WIPEOUT_RECOVER + 0.5)
+    expect(rider.phase).toBe(PHASE.LOADING)
+    expect(rider.kite.angle).toBeGreaterThanOrEqual(TUNING.RELAUNCH_ANGLE)
+
+    for (let i = 0; i < 60; i++) stepRider(rider, loadingAt(WINDOW_MAX), KT_12, DT)
     expect(rider.speed).toBeGreaterThan(0)
+  })
+
+  it('leaves the kite in the water until it is steered out to the edge', () => {
+    // The mild skill check of §7.2. A player who never takes the kite out to
+    // the window edge never gets it flying, and the timer alone does not hand
+    // it back: ten seconds of holding the kite mid-window is ten seconds down.
+    const rider = land(0, 2, 10)
+    const stuck = relaunch(rider, TUNING.RELAUNCH_ANGLE - 10)
+
+    expect(stuck).toBe(10)
+    expect(rider.phase).toBe(PHASE.WIPEOUT)
+    expect(rider.recover).toBe(0)
+
+    // And it is the kite that was missing, not the time: taking it out to the
+    // edge from here relaunches on the drag alone.
+    const rest = relaunch(rider, WINDOW_MAX)
+    expect(rest).toBeGreaterThan(0)
+    expect(rest).toBeLessThan(TUNING.WIPEOUT_RECOVER)
+    expect(rider.phase).toBe(PHASE.LOADING)
+  })
+
+  it('drags the kite back at RELAUNCH_SLEW of the rate it flies at', () => {
+    // A kite being pulled through water is not a kite being flown, and the
+    // difference is what makes the beat cost anything at all.
+    const rider = land(0, 2, 10)
+    const before = rider.kite.angle
+
+    stepRider(rider, loadingAt(WINDOW_MAX), KT_12, DT)
+    expect(rider.phase).toBe(PHASE.WIPEOUT)
+    expect(rider.kite.angle - before).toBeCloseTo(
+      slewRate(KT_12) * TUNING.RELAUNCH_SLEW * DT,
+      10,
+    )
   })
 
   it('records the descent rate the landing was judged on', () => {

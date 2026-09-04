@@ -105,9 +105,24 @@ const SHAKE_MIN = 0.05
  */
 const SPRAY_SEED = 0x5eed
 
+/**
+ * Seconds a tier banner holds. Longer than a landing verdict because it is
+ * rarer and further from the action — effect anatomy, not a gameplay value, so
+ * it lives here rather than in TUNING (see palette.ts).
+ */
+export const TIER_FLASH_TIME = 2.2
+
 export interface Effects {
   /** Touchdowns already reacted to. A change in `view.landings` is the event. */
   seen: number
+  /**
+   * The tier already reacted to. Spec §7.1 makes every tier transition an
+   * event, and this is the edge it fires off — the same pattern as `seen`, so
+   * a boundary crossed between two frames still announces itself exactly once.
+   */
+  tier: number
+  /** Seconds left of the tier banner. */
+  tierFlash: number
   /** The verdict being shown, 0..1 (spec §3.7). */
   quality: number
   /** Why that verdict was not clean — the reason drawn beside the word. */
@@ -127,6 +142,10 @@ export interface Effects {
 export function createEffects(): Effects {
   return {
     seen: 0,
+    // Tier 1 is where every run starts, so the first frame of one is not a
+    // transition and does not announce itself.
+    tier: 1,
+    tierFlash: 0,
     quality: 0,
     reason: LAND_REASON.NONE,
     flash: 0,
@@ -228,6 +247,19 @@ function land(fx: Effects, camera: Camera, view: RenderView): void {
  */
 export function updateEffects(fx: Effects, camera: Camera, view: RenderView, dt: number): void {
   if (view.landings !== fx.seen) land(fx, camera, view)
+
+  // Crossing into a new tier is an event (spec §7.1). The wash under it has
+  // been sliding the whole way; this is the moment the multiplier stepped, and
+  // it is the only part of the tier the player could not otherwise see.
+  if (view.tier !== fx.tier) {
+    fx.tier = view.tier
+    fx.tierFlash = TIER_FLASH_TIME
+  }
+
+  if (fx.tierFlash > 0) {
+    fx.tierFlash -= dt
+    if (fx.tierFlash < 0) fx.tierFlash = 0
+  }
 
   if (fx.flash > 0) {
     fx.flash -= dt

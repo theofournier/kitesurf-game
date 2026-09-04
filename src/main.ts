@@ -16,6 +16,7 @@ import { LAND_REASON, PHASE } from './sim/rider.ts'
 import { WIND_AUTO } from './sim/world.ts'
 import { createCamera, updateCamera } from './render/camera.ts'
 import { createEffects, updateEffects } from './render/effects.ts'
+import { createHud, drawHud } from './render/hud.ts'
 import { drawScene } from './render/scene.ts'
 import { captureSnapshot, createSnapshot, createView, interpolateView } from './render/view.ts'
 
@@ -25,12 +26,12 @@ const MS_PER_SECOND = 1000
 /** Exponential smoothing for the debug fps readout. */
 const FPS_SMOOTHING = 0.1
 /**
- * Range of the debug wind override, kt. Spans the spec §7.1 tier table with
- * room above tier 4, and bottoms out at WIND_AUTO — the off position, where
- * the wind comes from the curve. A debug-tool bound, not a gameplay value, so
- * it lives here rather than in TUNING.
+ * Range of the debug wind override, kt. Spans the spec §7.1 tier table and the
+ * ceiling the open tier climbs toward, and bottoms out at WIND_AUTO — the off
+ * position, where the wind comes from the curve. A debug-tool bound, not a
+ * gameplay value, so it lives here rather than in TUNING.
  */
-const WIND_SLIDER_MAX = 40
+const WIND_SLIDER_MAX = 45
 const WIND_SLIDER_STEP = 0.5
 
 const debugEnabled = new URLSearchParams(window.location.search).get('debug') === '1'
@@ -45,6 +46,7 @@ const accumulator = createAccumulator()
 const camera = createCamera()
 const view = createView()
 const effects = createEffects()
+const hud = createHud()
 /**
  * The two sim snapshots the render interpolates between: `previous` is the
  * state before the most recent step, `pending` is the one being captured for
@@ -117,9 +119,13 @@ function watchDpr(): void {
  * answer the question the build plan's turn 3 asks the telegraph to answer.
  *
  * `obstacle` is the metres left to the next thing that has to be jumped, and
- * `hit` the last one that was not. Contact is fatal in spec §7.2 and nothing
- * ends a run yet, so until the tiers land this readout is the only place a
- * collision shows up at all.
+ * `hit` the one that ended the run — contact is fatal (spec §7.2), so `over`
+ * goes with it. Then the run structure of session 9: which tier the distance
+ * has reached, and the score, combo and near-miss bonus that tier is paying
+ * (§7.1, §8). Pre-allocated, and only written when the panel is up, so the loop
+ * stays allocation-free either way — `state`, `reason`, `hit` and `over` are
+ * seeded with strings so the panel builds string monitors for them rather than
+ * numeric ones.
  */
 const readout = {
   kiteAngle: 0,
@@ -141,6 +147,13 @@ const readout = {
   lipAhead: 0,
   obstacle: 0,
   hit: 'none' as string,
+  tier: 0,
+  score: 0,
+  combo: 0,
+  lastJump: 0,
+  clearBonus: 0,
+  bestJump: 0,
+  over: 'no' as string,
   fps: 0,
   tick: 0,
   time: 0,
@@ -198,6 +211,7 @@ function frame(now: number): void {
 
   updateEffects(effects, camera, view, frameTime)
   drawScene(ctx, camera, view, effects)
+  drawHud(ctx, hud, view, effects)
 
   if (debugEnabled) {
     if (frameTime > 0) {
@@ -222,6 +236,13 @@ function frame(now: number): void {
     readout.lipAhead = state.kicker.delta
     readout.obstacle = gapToNextObstacle(state)
     if (state.hit !== null) readout.hit = state.hit.type
+    readout.tier = state.tier
+    readout.score = state.score.total
+    readout.combo = state.score.combo
+    readout.lastJump = state.score.lastJump
+    readout.clearBonus = state.score.lastBonus
+    readout.bestJump = state.score.bestJump
+    readout.over = state.over ? 'RUN OVER' : 'no'
     readout.tick = state.tick
     readout.time = state.time
     readout.steps = steps

@@ -39,6 +39,7 @@ import {
 } from '../src/sim/obstacles.ts'
 import { createRiderState, popImpulse, stepRider } from '../src/sim/rider.ts'
 import { Rng } from '../src/sim/rng.ts'
+import { tierAt, WIND_AUTO, windAt } from '../src/sim/wind.ts'
 import { createWorldState, initWave, stepWorld, WAVE } from '../src/sim/world.ts'
 
 const TIERS = [12, 18, 25, 35]
@@ -162,6 +163,47 @@ describe('the fairness guarantee (spec §9.2)', () => {
     }
   })
 
+  /**
+   * The same guarantee, on the wind curve rather than on a fixed wind.
+   *
+   * This is the case tiers introduce and the fixed-wind fuzz above cannot see:
+   * a spawn is committed in one wind and ridden at another, because the wind
+   * rises with every metre of the approach (spec §7.1). Every term of
+   * `popSetupTime` gets *cheaper* in more wind, so the honest question is
+   * whether the gap holds at the weakest wind anywhere on the line to it —
+   * which is the wind at the start of the approach, and is what the generator
+   * prices the gate at.
+   *
+   * Scanned across the approach rather than asserted at that one point, so a
+   * `minSafeGap` that stopped being monotonic in wind would fail here rather
+   * than quietly agreeing with the generator.
+   */
+  it('holds all the way up the wind curve, where a spawn is ridden in more wind than it was laid in', () => {
+    const SAMPLES = 8
+
+    for (let seed = 0; seed < 40; seed++) {
+      let clear = 0
+
+      for (const spawn of spawnsOver(seed, WIND_AUTO, 8000, 25)) {
+        let need = 0
+        for (let i = 0; i <= SAMPLES; i++) {
+          const at = clear + ((spawn.gateX - clear) * i) / SAMPLES
+          const gap = minSafeGap(spawn.type, windAt(at))
+          if (gap > need) need = gap
+        }
+
+        expect(
+          spawn.gateX - clear,
+          `seed ${seed}: ${spawn.type} at ${spawn.gateX.toFixed(0)}m, ` +
+            `${windAt(clear).toFixed(1)}kt at the start of the line`,
+        ).toBeGreaterThanOrEqual(need)
+        expect(spawn.gateX - spawn.riderX).toBeGreaterThanOrEqual(need)
+
+        clear = spawn.gateX + runout(spawn.type)
+      }
+    }
+  })
+
   it('leaves the rider a gap far wider than the guarantee, because the horizon is wider', () => {
     // The rider half of the inequality is enforced by the spawn horizon rather
     // than by the gate: nothing is committed inside it, and it is three times
@@ -175,19 +217,36 @@ describe('the fairness guarantee (spec §9.2)', () => {
 })
 
 describe('what a spawn is allowed to be (spec §9.1, §9.2)', () => {
-  it('puts piers at tier 3 and up, out of the physics rather than out of a rule', () => {
-    // §9.1 says "rare, tier 3+" and nothing anywhere says so in code. A pier is
-    // 3m of wall and wants 3.5m of apex with the margin; flat water gives 2.40m
-    // at 12kt, 3.37m at 18kt and 4.00m at 25kt. The tier the spec asks for is
-    // what the flat-water ceiling of §3.5 does to a 3m wall.
+  it('puts piers at tier 3 and up (spec §9.1)', () => {
+    // §9.1 says "rare, tier 3+". The physics nearly says it on its own: a pier
+    // is 3m of wall and wants 3.5m of apex with the margin, and flat water
+    // gives 2.40m at 12kt, 3.37m at 18kt and 4.00m at 25kt — so the tier the
+    // spec asks for is very close to what the flat-water ceiling of §3.5 does
+    // to a 3m wall.
     expect(clearable(OBSTACLE.PIER, 12)).toBe(false)
     expect(clearable(OBSTACLE.PIER, 18)).toBe(false)
     expect(clearable(OBSTACLE.PIER, 25)).toBe(true)
     expect(clearable(OBSTACLE.PIER, 35)).toBe(true)
 
-    for (const wind of [12, 18]) {
+    // Nearly, but not quite: it turns true at 19.1kt, which the continuous
+    // curve of §7.1 reaches around 660m — the middle of tier 2, where the only
+    // line over a pier is the strongest one in the game. So the generator asks
+    // for the tier as well, and the spec's table is what holds.
+    for (const wind of [12, 18, 19.5, 24.9]) {
       for (const spawn of spawnsOver(5, wind, 6000, 20)) {
-        expect(spawn.type).not.toBe(OBSTACLE.PIER)
+        expect(spawn.type, `${wind}kt`).not.toBe(OBSTACLE.PIER)
+      }
+    }
+    expect(spawnsOver(5, 25, 6000, 20).some((s) => s.type === OBSTACLE.PIER)).toBe(true)
+  })
+
+  it('lays its first pier no earlier than tier 3, riding the curve', () => {
+    // The same rule seen from the water rather than from the wind: with no
+    // override, every pier in a run is past the tier 3 boundary.
+    for (let seed = 0; seed < 20; seed++) {
+      for (const spawn of spawnsOver(seed, WIND_AUTO, 8000, 20)) {
+        if (spawn.type !== OBSTACLE.PIER) continue
+        expect(tierAt(spawn.gateX), `seed ${seed}`).toBeGreaterThanOrEqual(TUNING.PIER_TIER)
       }
     }
   })

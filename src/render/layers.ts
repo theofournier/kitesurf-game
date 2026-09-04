@@ -16,6 +16,38 @@ const BAND_ROWS = 3
 const NEAR_BAND_PX = 190
 
 /**
+ * How much of the tier wash the top of the curve lays on. The sky takes less
+ * than the water: a sky washed as hard as the sea loses the horizon, which is
+ * the one line the whole frame is composed around.
+ */
+const TINT_SKY = 0.55
+const TINT_SEA = 0.4
+
+/**
+ * Lays the tier wash over a band already drawn (spec §7.1).
+ *
+ * `tint` is `windFraction`: 0 in the flat water of tier 1 and 1 at the top of
+ * the curve, sliding with every metre rather than stepping at a boundary. The
+ * alpha is restored on the way out, so nothing downstream inherits it.
+ */
+function wash(
+  ctx: CanvasRenderingContext2D,
+  colour: string,
+  alpha: number,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): void {
+  if (!(alpha > 0) || !(h > 0)) return
+
+  ctx.globalAlpha = alpha
+  ctx.fillStyle = colour
+  ctx.fillRect(x, y, w, h)
+  ctx.globalAlpha = 1
+}
+
+/**
  * One row of streaks scrolling at `parallax` times the rider's own plane.
  *
  * The row is drawn from a phase offset rather than from a list of positions:
@@ -54,9 +86,11 @@ export function drawSky(
   width: number,
   camera: Camera,
   bleed = 0,
+  tint = 0,
 ): void {
   ctx.fillStyle = PALETTE.sky
   ctx.fillRect(-bleed, -bleed, width + bleed * 2, camera.horizonY + bleed)
+  wash(ctx, PALETTE.tierSky, tint * TINT_SKY, -bleed, -bleed, width + bleed * 2, camera.horizonY + bleed)
 
   ctx.fillStyle = PALETTE.horizon
   ctx.fillRect(-bleed, camera.horizonY, width + bleed * 2, 1)
@@ -76,6 +110,7 @@ export function drawWater(
   height: number,
   camera: Camera,
   bleed = 0,
+  tint = 0,
 ): void {
   const horizon = camera.horizonY
   const water = camera.waterY
@@ -85,6 +120,11 @@ export function drawWater(
   ctx.fillRect(-bleed, horizon, wide, Math.max(0, water - horizon))
   ctx.fillStyle = PALETTE.sea
   ctx.fillRect(-bleed, water, wide, Math.max(0, height - water) + bleed)
+
+  // The tier wash goes under the streaks, not over them: dark water with the
+  // same bright chop on it is what "whitecaps, heavy spray" has to look like
+  // before there is any art (spec §7.1).
+  wash(ctx, PALETTE.tierSea, tint * TINT_SEA, -bleed, horizon, wide, height - horizon + bleed)
 
   const gap = water - horizon
   const farEnd = horizon + gap * FAR_BAND

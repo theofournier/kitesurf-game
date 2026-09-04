@@ -206,8 +206,20 @@ export function lineTension(theta: number, speed: number, wind: number): number 
  * The overshoot is aimed at a clamped angle, so a sweep to the very edge of the
  * window has nowhere to carry to and simply arrives — `angle` stays in 0..90
  * under every input.
+ *
+ * `rate` scales the slew, and exists for exactly one caller: a kite down in the
+ * water after a wipeout, which is dragged back to the edge of the window rather
+ * than flown there (spec §7.2). It scales the travel and nothing else — the
+ * settle-back is a spring in seconds, and a kite in the water is not settling
+ * back from anything anyway.
  */
-export function stepKite(kite: KiteState, targetDeg: number, wind: number, dt: number): void {
+export function stepKite(
+  kite: KiteState,
+  targetDeg: number,
+  wind: number,
+  dt: number,
+  rate: number = 1,
+): void {
   const target = clampAngle(targetDeg)
 
   // A new target abandons an overshoot in flight: the player is steering again,
@@ -231,7 +243,7 @@ export function stepKite(kite: KiteState, targetDeg: number, wind: number, dt: n
     return
   }
 
-  const maxStep = slewRate(wind) * dt
+  const maxStep = slewRate(wind) * rate * dt
   let delta = kite.aim - kite.angle
   const remaining = delta < 0 ? -delta : delta
   // Whether the kite is pinned at its slew rate this frame, i.e. still behind

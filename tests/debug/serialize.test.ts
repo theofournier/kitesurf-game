@@ -41,10 +41,13 @@ describe('serializeTuning', () => {
 
   it('keeps the section headings of tuning.ts, in order', () => {
     const dump = serializeTuning()
-    const headings = dump.match(/^ {2}\/\/ \w+$/gm)!.map((line) => line.trim())
+    // Every section, including the ones whose heading carries a spec reference:
+    // the dump is meant to be pasted back over tuning.ts, so a heading that
+    // reads differently there is a heading that would arrive twice.
+    const headings = dump.match(/^ {2}\/\/ [^\n]+$/gm)!.map((line) => line.trim())
 
     expect(headings).toEqual([
-      '// wind',
+      '// wind (spec §7.1)',
       '// kite',
       '// drive',
       '// load',
@@ -54,7 +57,9 @@ describe('serializeTuning', () => {
       '// scoring',
       '// render',
       '// feedback',
+      '// touch (spec §5.3)',
       '// generation',
+      '// obstacles (spec §9.1)',
     ])
   })
 

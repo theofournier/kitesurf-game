@@ -1,8 +1,10 @@
 # Tuning reference
 
 Every constant in [tuning.ts](src/config/tuning.ts), what it does, and what moves when
-you change it. The spec ([kitesurf-game-spec.md](kitesurf-game-spec.md) §12) owns the
-starting values; this document explains them.
+you change it. [tuning.ts](src/config/tuning.ts) is the live source of truth for the
+*values*; spec §12 is the snapshot they started from and has been left to drift on
+purpose, so where the two disagree the code is right. This document explains them, and
+every derived figure in it is computed from the shipped values.
 
 **These values are owned by the human.** Never edit one to make a test pass — if a test
 and a constant disagree, the test or the formula is wrong (see [CLAUDE.md](CLAUDE.md)).
@@ -21,12 +23,54 @@ the window. `windPower = wind / WIND_BASE` — 1.0 at tier 1, ~2.92 at 35kt.
 | Param | Value | Meaning |
 |---|---|---|
 | `WIND_BASE` | 12 kt | Tier-1 wind: the reference every other wind is measured against |
+| `TIER_DIST` | [500, 1500, 3000] m | Where tiers 2, 3 and 4 begin |
+| `TIER_WIND` | [18, 25, 35] kt | The wind at each of those boundaries |
+| `TIER_MULT` | [1.0, 1.5, 2.5, 4.0] | Score multiplier of each tier |
+| `WIND_TOP` | 45 kt | Ceiling the open tier climbs toward and never reaches |
+| `WIND_TOP_M` | 3000 m | Distance past the last boundary that closes half of that gap |
 
-Used by [windPower()](src/sim/kite.ts#L97) (divides by it), [slewRate()](src/sim/kite.ts#L89)
-(subtracts it) and [windAt()](src/sim/world.ts#L30). Because everything is expressed
-*relative* to it, raising `WIND_BASE` alone changes nothing about a tier-1 run — it just
-redefines what "12kt" means. To feel tier 2–4 before the wind curve exists, use the
-`wind` override on `SimState` (`WIND_AUTO` = no override), not this constant.
+`WIND_BASE` is used by [windPower()](src/sim/kite.ts#L97) (divides by it),
+[slewRate()](src/sim/kite.ts#L89) (subtracts it) and [windAt()](src/sim/wind.ts#L103).
+Because everything is expressed *relative* to it, raising `WIND_BASE` alone changes
+nothing about a tier-1 run — it just redefines what "12kt" means. To feel one tier without
+riding to it, use the `windOverride` on `SimState` (`WIND_AUTO` = take the curve), not
+this constant.
+
+The rest is the spec §7.1 tier table, split into the three columns the sim actually reads.
+[windAt()](src/sim/wind.ts#L103) is piecewise linear through `(0, WIND_BASE)` and the
+`TIER_DIST`/`TIER_WIND` pairs, so **the tabled wind is the wind at the moment a tier
+begins** and every metre between two boundaries interpolates:
+
+| Distance | 0 | 250 | 500 | 1000 | 1500 | 2250 | 3000 | 4500 | 6000 | 12000 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Wind | 12.0 | 15.0 | **18.0** | 21.5 | **25.0** | 30.0 | **35.0** | 38.3 | 40.0 | 42.5 |
+
+Past the last boundary the curve keeps climbing asymptotically —
+`wind = 35 + (WIND_TOP - 35) * d / (d + WIND_TOP_M)`, where `d` is metres past it — so
+tier 4 goes on getting harder for as long as a run lasts without eventually handing the
+physics a wind nothing was tuned at. `WIND_TOP_M` is the half-life: 3000m past the
+boundary sits halfway between 35kt and `WIND_TOP`.
+
+**Wind scales with distance, never with time.** That is the whole anti-farming rule of
+§7.1 — a rider who dawdles meets the same wind in the same place — and the combo decay of
+`COMBO_DECAY_M` is keyed the same way for the same reason.
+
+[tierAt()](src/sim/wind.ts#L49) gives a boundary to the tier it *opens*, so 500m is the
+first metre of tier 2. Only [tierMult()](src/sim/wind.ts#L79) steps there; everything else
+about the wind slides. What each tier is worth, at a full-load pop:
+
+| Tier | Wind | Mult | `windPower` | `slewRate` | Terminal at drive peak | Flat apex → score | Wake apex → score |
+|---|---|---|---|---|---|---|---|
+| 1 | 12kt | 1.0× | 1.00 | 90.0 deg/s | 15.2 m/s | 2.40m → 37 | 13.80m → 513 |
+| 2 | 18kt | 1.5× | 1.50 | 103.5 deg/s | 18.6 m/s | 3.37m → 93 | 19.42m → 1284 |
+| 3 | 25kt | 2.5× | 2.08 | 119.3 deg/s | 21.9 m/s | 4.00m → 200 | 23.03m → 2763 |
+| 4 | 35kt | 4.0× | 2.92 | 141.8 deg/s | 22.0 m/s (capped) | 4.43m → 373 | 25.54m → 5162 |
+
+`TIER_MULT` is the smallest of the four levers on that last column and the only explicit
+one: between tier 1 and tier 4 it multiplies a jump by 4, while wind acting through the
+pop multiplies the same jump's *height* — and `HEIGHT_EXP` turns that into 10× on flat
+water and 14× off a wake. Raising `TIER_MULT` to make deep runs pay is nearly always the
+wrong dial; the height curve already does it.
 
 ---
 
@@ -51,7 +95,7 @@ slewRate = BASE_SLEW * (1 + (wind - WIND_BASE) / SLEW_WIND_SCALE)
 §3.7, where a wave-sized air at 12kt cannot be redirected into the clean band in time.
 Lowering `SLEW_WIND_SCALE` makes high wind feel twitchier relative to tier 1.
 
-The overshoot ([stepKite()](src/sim/kite.ts#L186)) is what produces the "sending it"
+The overshoot ([stepKite()](src/sim/kite.ts#L216)) is what produces the "sending it"
 feel. It arms only when the *unbroken* sweep in one direction exceeds
 `OVERSHOOT_MIN_SWEEP`, counting only frames where the kite was actually pinned at its
 slew rate — a pointer the kite can keep up with is being steered, not swept, and earns
@@ -59,7 +103,7 @@ nothing. A reversal resets the run. The kite then carries `OVERSHOOT_DEG` past t
 target and eases back linearly over `OVERSHOOT_SETTLE`. Note the overshoot is clamped to
 the window, so a sweep that ends at 0 or 90 cannot overshoot at all.
 
-`TENSION_SPEED_MIX` shapes [lineTension()](src/sim/kite.ts#L164), which is what the
+`TENSION_SPEED_MIX` shapes [lineTension()](src/sim/kite.ts#L188), which is what the
 rendered line sag reads:
 
 ```
@@ -95,18 +139,18 @@ needs it at zenith.**
 `DRIVE_SHAPE` is a TUNING value rather than the spec's inline `0.5` because it is the
 only thing that moves the peak: 0.5 puts it at 70.5°, 0.88 puts it at 50°. The spec's
 prose ("peaks ~50°") and its formula disagree, so the number is exposed and the peak is
-found by a scan, memoised on the constant, in [drivePeak()](src/sim/kite.ts#L138).
+found by a scan, memoised on the constant, in [drivePeak()](src/sim/kite.ts#L157).
 `LIFT_EXP` sharpens or flattens how quickly lift falls off the zenith — at 1.5, lift is
 0.74 at 35° and 0.13 at 75°, which is exactly the trade the landing band grades.
 
 `DRIVE_K` and `DRAG_K` together set the speed a parked kite settles at
-([terminalSpeed()](src/sim/rider.ts#L179)): at the drive peak that is ~15.2 m/s at 12kt
+([terminalSpeed()](src/sim/rider.ts#L218)): at the drive peak that is ~15.2 m/s at 12kt
 and ~26.0 m/s at 35kt — so at tier 4 the `MAX_SPEED` ceiling is what the rider actually
 rides against. Both scale speed as a square root, so doubling `DRIVE_K` is only ~1.4×
 the top speed.
 
 `AIR_DRIVE_MIX` applies the *same* balance airborne at 35% strength
-([airAccel()](src/sim/rider.ts#L150)). Because it is a fraction of the water
+([airAccel()](src/sim/rider.ts#L189)). Because it is a fraction of the water
 balance rather than a term of its own, the air converges on the same terminal speed and
 never passes it: **a jump is somewhere to spend speed or hold it, never a faster way to
 travel.** At zenith `driveFactor` is 0, so the whole term is drag and the air costs
@@ -139,7 +183,7 @@ slower board, and a slower board loads slower still, because the rate above scal
 speed. Terminal speed under a full edge is `1/sqrt(1 + CARVE_DRAG_K/DRAG_K)` = 0.71× the
 free-riding one.
 
-Past 1.0 the grace timer runs ([buildLoad()](src/sim/rider.ts#L359)); past
+Past 1.0 the grace timer runs ([buildLoad()](src/sim/rider.ts#L457)); past
 `STALL_GRACE` the edge catches: speed drops by `STALL_SPEED_LOSS`, load resets to 0, and
 **the pop is forfeited** until the next edge. Without this, the optimal play is to always
 hold maximum.
@@ -153,7 +197,7 @@ hold maximum.
 | `POP_K` | 9.5 | Vertical impulse scale |
 | `FLAT_POP_CAP` | 5.0 m | Asymptotic ceiling on flat-water apex |
 | `GRAVITY` | 9.81 m/s² | Standard gravity |
-| `FLOAT_K` | 1.6 | Upward acceleration the kite makes at zenith, per unit windPower |
+| `FLOAT_K` | 2.0 | Upward acceleration the kite makes at zenith, per unit windPower |
 
 ```
 popImpulse = capFlat(load * liftFactor(θ) * POP_K * windPower) * kickerBonus
@@ -165,18 +209,31 @@ flat-water pop (load 1, zenith) is 9.5 m/s at 12kt — 4.6m of raw apex, which t
 then brings down.
 
 `FLAT_POP_CAP` is not a hard clamp: a clamp would make every good pop identical to every
-perfect one. [capFlatImpulse()](src/sim/rider.ts#L216) is asymptotic —
+perfect one. [capFlatImpulse()](src/sim/rider.ts#L268) is asymptotic —
 `h → CAP * h / (h + CAP)` — strictly increasing, always below the cap, and barely
 touching a pop that was never near it. Shipped values land flat water at **2.40m at
 12kt** and **4.43m at 35kt** against the 5m ceiling, matching spec §4.4. The cap is
 applied *before* the kicker bonus, because it is flat water that is capped: a wave is
 how you beat it.
 
-`FLOAT_K` is the air's only steering ([floatAccel()](src/sim/rider.ts#L246)):
+`FLOAT_K` is the air's only steering ([floatAccel()](src/sim/rider.ts#L315)):
 `liftFactor(θ) * FLOAT_K * windPower`, max at zenith and always well under `GRAVITY` —
-1.6 m/s² is 16% of it, so holding zenith for a whole air stretches hangtime by ~19% over
-dropping the kite immediately (spec §3.6 targets ~15%). Push it much higher and the kite
-stops being a hangtime modifier and becomes a second engine.
+2.0 m/s² is 20% of it at tier 1, and 5.83 m/s² (59%) at 35kt. Push it much higher and the
+kite stops being a hangtime modifier and becomes a second engine.
+
+Spec §3.6 targets a ~15% hangtime swing between holding zenith and dropping the kite, and
+the shipped value brackets that number rather than hitting it, because "dropping the kite"
+has two honest readings:
+
+| Reading | Swing | `FLOAT_K` that would land it on 15% |
+|---|---|---|
+| Kite teleported to the window edge | 26.5% | ~1.15 |
+| Kite *slewed* there, as a thumb does | 11.7% | ~2.34 |
+
+2.0 is the nearer of the two to the thumb-driven reading, which is the one a player
+actually experiences. The gap is pinned by a characterisation test in
+[tests/rider.test.ts](tests/rider.test.ts): moving `FLOAT_K` will fail it on purpose, and
+the band in the test is what gets re-pinned — never the constant.
 
 `GRAVITY` is physical, not a feel dial — but it is in `TUNING` because every height,
 descent and budget formula reads it, and moon-gravity is a legitimate experiment.
@@ -188,9 +245,13 @@ descent and budget formula reads it, and moon-gravity is a legitimate experiment
 | Param | Value | Meaning |
 |---|---|---|
 | `KICKER_WINDOW` | 0.30 s | Release-timing window around the wave lip |
-| `BONUS_CHOP` | 1.15× | Perfect-timing bonus off chop (0.3m ramp) |
-| `BONUS_WAVE` | 1.60× | Perfect-timing bonus off a wave (1.0m ramp) |
-| `BONUS_WAKE` | 2.40× | Perfect-timing bonus off a boat wake (1.8m ramp) |
+| `BONUS_CHOP` | 1.15× | Perfect-timing bonus off chop |
+| `BONUS_WAVE` | 1.60× | Perfect-timing bonus off a wave |
+| `BONUS_WAKE` | 2.40× | Perfect-timing bonus off a boat wake |
+| `RAMP_CHOP` | 0.3 m | Ramp height of chop (spec §4.1) |
+| `RAMP_WAVE` | 1.0 m | …of a wave |
+| `RAMP_WAKE` | 1.8 m | …of a boat wake |
+| `WAVE_FACE_K` | 5 | Metres of face per √metre of ramp height |
 
 ```
 Δt          = |t_release - t_lip|
@@ -200,12 +261,29 @@ kickerBonus = 1 + (maxBonus - 1) * max(0, 1 - (Δt / KICKER_WINDOW)²)
 Full falloff to 1.0× at ±300ms, with roughly full bonus inside ±120ms. The quadratic
 falloff is what makes the release *timing* — not just the release *angle* — a skill.
 
-**Not wired yet.** Waves do not exist in [world.ts](src/sim/world.ts), so nothing reads
-`KICKER_WINDOW` and the bonuses only reach `popImpulse` through tests. When they land,
-note that the bonus multiplies the *impulse*, so apex scales with the **square** of it:
-`BONUS_WAKE` at 12kt is 2.4² = 5.8× the flat apex, i.e. ~13.8m against spec §4.4's 7m
-target for that launch. Either the bonuses or their point of application will need a
-pass then.
+The bonus multiplies the *impulse*, so apex scales with the **square** of it: `BONUS_WAKE`
+at 12kt is 2.4² = 5.8× the flat apex. Against spec §4.4's height ceilings that is
+generous — 13.8m where §4.4 wants ~7m off that launch at tier 1 — so **the bonuses, or the
+point at which they are applied, are the first thing to reach for if the big airs feel
+silly.** They are also what the landing budget is stretched by: a 12kt wake air is
+survivable and never clean (see `LAND_FORGIVE`), which is the shape the current numbers
+give it.
+
+The three ramps are the spec §4.1 table, and the face they present is
+`WAVE_FACE_K * sqrt(height)` — sub-linear, so a taller wave is also a steeper one:
+
+| Wave | Ramp | Face | Ramp velocity at `MAX_SPEED` | Apex from the ramp alone | Full 12kt pop | Full 35kt pop |
+|---|---|---|---|---|---|---|
+| Chop | 0.3m | 2.74m | 2.41 m/s | 0.30m | 3.17m | 5.86m |
+| Wave | 1.0m | 5.00m | 4.40 m/s | 0.99m | 6.13m | 11.35m |
+| Wake | 1.8m | 6.71m | 5.90 m/s | 1.78m | 13.80m | 25.54m |
+
+`WAVE_FACE_K` is set so that at `MAX_SPEED` a wave gives very nearly its own height back
+as apex — the reference it was picked against, not a law of the formula. The ramp velocity
+is added *after* the flat-water cap and pays out whether or not the pop was any good: the
+bonus grades the timing, the ramp is the water under the board. Lowering `WAVE_FACE_K`
+makes every wave steeper and kickier at once, which is the one dial that changes what a
+wave *is* rather than what it is worth.
 
 ---
 
@@ -217,19 +295,21 @@ pass then.
 | `SKETCHY_BAND` | [20, 85] deg | θ band that survives at all |
 | `SOFT_LAND` | 8 m/s | Descent-rate threshold for clean, at the reference apex |
 | `HARD_LAND` | 14 m/s | Descent-rate threshold for surviving, at the reference apex |
-| `LAND_FORGIVE` | 0.8 | 0 = flat descent cap, 1 = same demand at every apex |
+| `LAND_FORGIVE` | 0.85 | 0 = flat descent cap, 1 = same demand at every apex |
 | `CLEAN_QUALITY` | 1.0 | `landingQuality` of a clean touchdown |
 | `SKETCHY_QUALITY` | 0.4 | `landingQuality` of a sketchy one |
 | `SKETCHY_SPEED_LOSS` | 0.25 | Share of speed a sketchy landing takes away |
 | `LAND_RECOVER` | 0.25 s | The landing beat before riding resumes |
-| `WIPEOUT_RECOVER` | 2.0 s | Relaunch beat with the kite in the water |
+| `WIPEOUT_RECOVER` | 2.0 s | Minimum relaunch beat with the kite in the water |
+| `RELAUNCH_ANGLE` | 80 deg | How far out the kite has to be dragged before it flies again |
+| `RELAUNCH_SLEW` | 0.4 | Share of the slew rate a kite in the water drags at |
 
 ```
 ballisticDescent(apex) = sqrt(2 * GRAVITY * apex)
 budget(t, apex)        = t^(1 - LAND_FORGIVE) * ballisticDescent(apex)^LAND_FORGIVE
 ```
 
-Evaluated at touchdown by [landingQuality()](src/sim/rider.ts#L316): θ inside
+Evaluated at touchdown by [landingQuality()](src/sim/rider.ts#L401): θ inside
 `CLEAN_BAND` **and** descent under `budget(SOFT_LAND, apex)` → clean; θ inside
 `SKETCHY_BAND` and descent under `budget(HARD_LAND, apex)` → sketchy; anything else is a
 wipeout.
@@ -242,10 +322,11 @@ than the descent does:
 
 | Apex | Ballistic descent | Clean budget | Sketchy budget |
 |---|---|---|---|
-| 3m | 7.67 | 7.74 | 8.65 |
-| 5m | 9.90 | 9.49 | 10.61 |
-| 10m | 14.01 | 12.52 | 14.01 |
-| 20m | 19.81 | 16.52 | 18.48 |
+| 3m | 7.67 | 7.72 | 8.40 |
+| 5m | 9.90 | 9.59 | 10.43 |
+| 10m | 14.01 | 12.88 | 14.01 |
+| 20m | 19.81 | 17.29 | 18.80 |
+| 40m | 28.01 | 23.21 | 25.25 |
 
 Each threshold's own reference apex is where it exactly equals the ballistic descent:
 3.26m for `SOFT_LAND`, 9.99m for `HARD_LAND`. Below that, a no-float arc lands inside the
@@ -261,7 +342,7 @@ what a 2m hop does.
 
 `CLEAN_QUALITY` and `SKETCHY_QUALITY` are the score multipliers from spec §3.7, but they
 are also the *classifier* — `quality >= CLEAN_QUALITY` is the clean test in both
-[rider.ts](src/sim/rider.ts#L420) and [effects.ts](src/render/effects.ts#L118), and
+[rider.ts](src/sim/rider.ts#L372) and [effects.ts](src/render/effects.ts#L162), and
 `quality > 0` separates sketchy from wipeout. Keep the ordering
 `CLEAN > SKETCHY > 0` or the verdict colours, spray and speed penalty all decouple from
 the physics.
@@ -270,6 +351,17 @@ The two recover timers are dead beats, not penalties in themselves: `LAND_RECOVE
 the crouch before riding resumes, `WIPEOUT_RECOVER` is the relaunch with the kite down —
 no drive and no load until it is back in the window (spec §7.2). Speed is already gone by
 then; this is the tempo cost that makes sending tricks worth the risk anyway.
+
+The relaunch is not a timer alone. The kite lies where the crash left it and drags toward
+the player's aim at `RELAUNCH_SLEW` of its flying rate, and the run resumes only once
+`WIPEOUT_RECOVER` has run out **and** the kite has reached `RELAUNCH_ANGLE` — the edge of
+the window, where a real one is relaunched from. From a kite parked at zenith, the far end
+of the window and the wipeout the landing table hands out most often, the drag is 2.22s at
+12kt and 1.41s at 35kt, so the beat spec §7.2 calls "~2s" is 2.0–2.25s for a player who
+steers straight away, and open-ended for one who does not. That is the mild skill check:
+`RELAUNCH_SLEW` sets how expensive it is to fumble, `RELAUNCH_ANGLE` how far off the aim
+has to be to count as fumbling. Both are floored above zero in the slider schema — a kite
+that could never come back out of the water would be a soft-lock.
 
 ---
 
@@ -285,22 +377,61 @@ then; this is the tempo cost that makes sending tricks worth the risk anyway.
 | `CLEARANCE_M` | 0.75 m | Vertical near-miss distance that pays a bonus |
 
 ```
-jumpScore     = peakHeight^HEIGHT_EXP * HEIGHT_K * landingQuality * combo
-              * clearanceBonus * windMult
-totalScore    = Σ jumpScore + distance * DIST_PER_M
+jumpScore      = peakHeight^HEIGHT_EXP * HEIGHT_K * landingQuality * combo
+               * clearanceBonus * windMult
+totalScore     = Σ jumpScore + distance * DIST_PER_M
 clearanceBonus = 1 + 0.5 * (1 - clearance / CLEARANCE_M)
 ```
 
-`HEIGHT_EXP > 1` is the arcade feel: one huge send always beats two safe ones. `HEIGHT_K`
-only sets the size of the numbers. `DIST_PER_M` is a deliberate trickle so cruising is
-not literally zero — distance is meant to pay off *indirectly*, by carrying the rider
-into higher wind.
+`windMult` is `TIER_MULT` for the tier the landing happened in (see **Wind**).
 
-Both combo rules key on **distance, not time** (`COMBO_DECAY_M`: −1 per 150m without a
-landed trick), the same anti-farming logic as the wind curve.
+`HEIGHT_EXP > 1` is the arcade feel: one huge send always beats two safe ones — doubling
+the apex pays 2.83×. `HEIGHT_K` only sets the size of the numbers.
 
-**Not wired yet** — [scoring.ts](src/sim/scoring.ts) is a stub, and nothing reads any of
-these six constants. Wind tier multipliers (spec §7.1) are not in `TUNING` at all yet.
+`DIST_PER_M` is a deliberate trickle so that cruising is not literally zero, and it is
+worth seeing how thin a trickle it is against the jumps. At tier 1 a metre of water pays
+1 and a perfect flat pop pays 37, so the opening stretch of a run is mostly distance; a
+wake hit is 513 at tier 1 and 5162 at tier 4. That is the intended shape — distance pays
+off *indirectly*, by carrying the rider into wind where the jumps are worth an order of
+magnitude more.
+
+### The combo ladder
+
+[creditLanding()](src/sim/scoring.ts#L179) moves the combo one rung per landing, and the
+jump is paid at the combo it was **taken** at — so the first clean landing of a run scores
+at 1× and the second at 2×:
+
+| Landing | Combo |
+|---|---|
+| Clean | +1, to `COMBO_CAP` |
+| Sketchy | −1, floor 1× |
+| Wipeout | straight back to 1× |
+
+Two rules gate that (spec §8.2):
+
+- **Only kicker jumps move it, either way.** [isTrick()](src/sim/scoring.ts#L149) is
+  `kickerBonus > 1`, so any wave counts — chop's 1.15× is enough — and flat water counts
+  for nothing. A flat hop scores at whatever combo is standing and neither builds it,
+  holds it nor costs it. This is why `WAVE_MIX_CHOP` is the largest share in the
+  generator: the combo has to have something to live on.
+- **`COMBO_DECAY_M` is a ruler, not a timer.** −1 per 150m since the last *trick* landing
+  ([stepScore()](src/sim/scoring.ts#L235)), so slowing down cannot farm it — the same
+  anti-farming logic as the wind curve. A near miss inside `CLEARANCE_M` also pushes the
+  ruler out (spec §8.3), and so does a landing that cost a rung: charging the rung *and*
+  leaving the ruler behind would take two multipliers off one mistake.
+
+At `COMBO_CAP` = 10 and `COMBO_DECAY_M` = 150m, holding a full combo means landing a
+trick every 150m for 1350m — which is most of the way to tier 3. Lower the cap and the
+ladder tops out before the wind does; raise the decay distance and the combo stops being
+something the rider has to keep feeding.
+
+`CLEARANCE_M` is the near-miss band ([clearanceBonus()](src/sim/scoring.ts#L91)): 1.0× at
+exactly 0.75m of air over the highest point of an obstacle, rising linearly to **1.5× at
+zero clearance**, and 1.0× for an air that passed over nothing. The smallest of an air's
+clearances is what gets paid, once, at the touchdown. It is measured off the same swept
+path the fatal collision test uses, against the same silhouette — a boat is measured from
+its mast, not its deck — so contact is exactly this gap going negative. That is the whole
+of why obstacles are worth flying *close to* rather than merely over.
 
 ---
 
@@ -313,7 +444,7 @@ these six constants. Wind tier multipliers (spec §7.1) are not in `TUNING` at a
 | `RIDER_H` | 48 px | Rider height (1.8m at `WORLD_SCALE`) |
 | `CAM_ALT_FOLLOW` | 0.6 | Fraction of rider altitude the camera follows |
 | `CAM_DAMP` | 8 /s | How fast the camera catches its altitude target |
-| `ANCHOR_X` | 0.3 | Rider screen position, fraction of width |
+| `ANCHOR_X` | 0.2 | Rider screen position, fraction of width |
 | `HORIZON_Y` | 0.42 | Horizon line, fraction of height |
 | `WATERLINE_Y` | 0.72 | Waterline at altitude 0, fraction of height |
 | `KITE_W` | 90 px | Span of the kite quad |
@@ -369,7 +500,7 @@ decided before the score does.
 
 Shake decays exponentially and re-jitters every frame — a shake that eased smoothly
 would read as a camera move rather than an impact. Spray counts are clamped to
-`SPRAY_MAX` in [effects.ts](src/render/effects.ts#L151), which is a pool size, not a
+`SPRAY_MAX` in [effects.ts](src/render/effects.ts#L193), which is a pool size, not a
 tuning value: raising `SPRAY_WIPEOUT` past it buys nothing.
 
 `SHADOW_FADE_M` fades the rider's shadow on the water as altitude climbs. The camera
@@ -414,6 +545,17 @@ minimum, so dragging either slider down cannot produce a target smaller than a t
 | Param | Value | Meaning |
 |---|---|---|
 | `REACTION_MIN` | 0.55 s | Minimum reaction window guaranteed before any obstacle |
+| `WAVE_GAP_MIN` | 55 m | Closest two wave lips may be |
+| `WAVE_GAP_MAX` | 140 m | Furthest apart |
+| `WAVE_MIX_CHOP` | 0.55 | Share of waves that are chop |
+| `WAVE_MIX_WAVE` | 0.35 | Share that are waves — boat wakes take the remaining 0.10 |
+| `WAVE_LEAD` | 2.5 s | Seconds of warning a wave gets before its lip |
+| `OBSTACLE_GAP_MIN` | 110 m | Closest two obstacles may be drawn, at tier 1 |
+| `OBSTACLE_GAP_MAX` | 320 m | Furthest apart, at tier 1 |
+| `DENSITY_MIN_EXP` | 0.5 | How hard wind shrinks the minimum gap |
+| `DENSITY_MAX_EXP` | 1.2 | …the maximum, which shrinks faster |
+| `OBSTACLE_MIX_PIER` | 0.25 | Share of free-standing obstacles that are piers, where the water allows |
+| `PIER_TIER` | 3 | First tier whose wind may carry a pier (spec §9.1) |
 
 ```
 timeToImpact = gap / currentSpeed
@@ -421,27 +563,99 @@ timeToImpact >= REACTION_MIN + popSetupTime(currentSpeed)
 ```
 
 The fairness guarantee (spec §9.2, non-negotiable): every spawned obstacle must be
-clearable given the rider's *current* speed. If the check fails, the spawn is pushed
-further out. An unavoidable death in an endless runner destroys trust in the game
-instantly.
+clearable. If the check fails, the spawn is pushed further out. An unavoidable death in an
+endless runner destroys trust in the game instantly.
 
-**Not wired yet** — obstacle generation is a later session, and nothing reads this
-constant.
+What [fairness.ts](src/sim/fairness.ts) actually enforces is stronger than the spec's
+line, and `REACTION_MIN` is the only tuning value in it — the rest is derived from the
+physics constants above. The gap is required to be fair at **every speed the rider could
+arrive at**, not just the one they had when it spawned, because a spawn commits a horizon
+ahead and the player can add 15 m/s in the seconds it takes to get there.
+[minSafeGap()](src/sim/fairness.ts#L407) is that guarantee as a distance, and it falls as
+the wind rises because every term of the line — spin up, build the edge, steer the kite,
+climb — is cheaper in more wind:
+
+| Obstacle | 12kt | 18kt | 25kt | 35kt | Runout |
+|---|---|---|---|---|---|
+| Buoy | 53m | 42m | 36m | 32m | 10m |
+| Boat | 68m | 56m | 49m | 43m | 49m |
+| Pier | — | — | 59m | 50m | 19m |
+
+Runout ([runout()](src/sim/fairness.ts#L437)) is why the gate is measured from where the
+*last* obstacle's jump puts the rider back on the water rather than from the obstacle
+itself: an obstacle forty metres past a boat is an unavoidable death by landing.
+
+Because the wind now rises with distance, a spawn is committed in one wind and ridden in
+another. The gate is therefore priced at the wind where the **approach starts**, which is
+the weakest wind anywhere on the line to it — the only reading that cannot promise a rider
+more pop than the water they are actually crossing will give them.
+
+`REACTION_MIN` is the one number in the inequality that is a *feel* value rather than a
+consequence. It buys the "I saw it" beat before the line even starts, and everything else
+is the line itself ([popSetupTime()](src/sim/fairness.ts#L370)). Raising it spaces every
+obstacle in the game further out, at every tier, in metres proportional to `MAX_SPEED`.
+
+The two density exponents shrink the draw range as the wind gets up, and the maximum
+shrinks faster than the minimum — which tightens the *rhythm* rather than merely speeding
+it up. A loose, sparse sea becomes a drumbeat:
+
+| Wind | Draw range |
+|---|---|
+| 12kt | 110–320m |
+| 18kt | 90–197m |
+| 25kt | 76–133m |
+| 35kt | 64–89m |
+| 40kt | 60–75m |
+
+The fairness floor is applied after the draw and always wins, so shrinking these cannot
+produce an unfair spawn — only a wall of obstacles at exactly the minimum safe gap.
+
+`WAVE_MIX_CHOP` and `WAVE_MIX_WAVE` split the same 1.0 and whatever they leave is the boat
+wake share, currently 0.10. Chop dominates because it is what the combo lives on
+(see **Scoring**); wakes are rare because a boat wake is the biggest air in the game and
+stops being an event if it is on every corner. `WAVE_LEAD` is the telegraph budget: the
+generator keeps the world stocked far enough ahead that a wave always exists before the
+moment it has to be drawn.
+
+`PIER_TIER` is spec §9.1's "rare, tier 3+", enforced as the wind that tier opens at rather
+than as a distance — the same thing under the curve (25kt is exactly 1500m) and the right
+thing under a wind override. It is needed *as well as* the physics:
+[clearable()](src/sim/fairness.ts#L329) turns true for a pier at 19.12kt, which the curve
+reaches around 660m, and a 3m wall whose only line is the strongest pop in the game is not
+what tier 2 is for.
 
 ---
 
-## Not yet wired
+## Obstacles
 
-For orientation, the constants that exist ahead of their systems:
-
-| Group | Constants | Waiting on |
+| Param | Value | Meaning |
 |---|---|---|
-| kicker | `KICKER_WINDOW` (bonuses reach `popImpulse` only from tests) | waves in [world.ts](src/sim/world.ts) |
-| scoring | all six | [scoring.ts](src/sim/scoring.ts) |
-| generation | `REACTION_MIN` | obstacle spawning |
+| `BUOY_H` | 0.5 m | Lethal height of a buoy |
+| `BUOY_LEN` | 0.8 m | Water it occupies |
+| `BOAT_HULL_H` | 2.4 m | Hull height |
+| `BOAT_MAST_H` | 4 m | Mast height — the tallest thing in the game |
+| `BOAT_LEN` | 8 m | Stern to bow |
+| `BOAT_MAST_AT` | 0.5 | Share of the hull length the mast stands at |
+| `BOAT_WAKE_LEAD` | 8 m | From the wake lip to the stern |
+| `PIER_H` | 3 m | Wall height |
+| `PIER_LEN` | 4 m | Water it occupies |
+| `CLEAR_MARGIN` | 0.5 m | Air a spawn has to be clearable by |
 
-Also missing from `TUNING` entirely: the wind-tier curve and its score multipliers
-(spec §7.1), and wave ramp heights (spec §4.1).
+The spec §9.1 table, plus the geometry the fairness gate measures against. Every one of
+these is read three times over — by [topAt()](src/sim/obstacles.ts#L151) for the collision
+test, by the clearance bonus of §8.3, and by the renderer — so the silhouette a player
+sees, the thing that kills them and the thing that pays a near miss cannot disagree.
+
+`BOAT_WAKE_LEAD` is the real decision here. A boat is never placed without the wake that
+launches it, and this is the arc a pop has to span: fast, and the stern is fractions of a
+second past the lip, so the demand is a near-vertical climb; slow, and the bow is seconds
+away, so the demand is a long hang. The lead distance balances the two, and it is what
+makes the greedy line and the safe line the same line.
+
+`CLEAR_MARGIN` is the honesty margin on the whole fairness model — every required impulse
+is solved for the top of the silhouette *plus* this. Raising it spaces obstacles further
+out; dropping it to zero makes the guarantee exact, which is to say fair only to a
+player who flies the perfect line.
 
 ---
 
@@ -455,6 +669,17 @@ At the shipped values, for sanity-checking a change:
 | `slewRate` | 90 deg/s | 141.8 deg/s |
 | Terminal speed at the drive peak | 15.2 m/s | 26.0 → capped to 22 m/s |
 | Perfect flat-water apex | 2.40m | 4.43m |
+| Perfect boat-wake apex | 13.80m | 25.54m |
+| Float at zenith | 2.0 m/s² (20% of g) | 5.83 m/s² (59% of g) |
+| Score multiplier | 1.0× | 4.0× |
+| A perfect flat pop, scored | 37 | 373 |
+| A perfect wake pop, scored | 513 | 5162 |
+| Nearest a buoy may spawn | 53m | 32m |
+| Nearest a boat may spawn | 68m | 43m |
 | Drive peak θ | 70.5° | — |
 | Time to full load at `MAX_SPEED` | 0.71s | — |
-| Float at zenith | 1.6 m/s² (16% of g) | 4.7 m/s² (48% of g) |
+| Distance the wind reaches this at | 0m | 3000m |
+
+Every figure here is computed from the shipped constants rather than remembered; if you
+change a value, the fastest way to regenerate them is a throwaway test that prints them,
+since the sim runs headless in Node.

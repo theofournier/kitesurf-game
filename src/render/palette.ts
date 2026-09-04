@@ -43,6 +43,21 @@ export const PALETTE = {
   cursorHalo: '#08121a',
   /** Altitude shadow on the water, under the rider. */
   shadow: 'rgba(8, 18, 26, 0.45)',
+  // The tier wash (spec §7.1). Each tier is meant to look like worse water than
+  // the last — "flat water, pale sky" up to "barely controllable" — and the
+  // cheapest honest version of that at grey-box stage is to drain the light out
+  // of the sky and the sea as the wind climbs. Laid over the flats at an alpha
+  // that follows the wind rather than the tier, so the change is continuous the
+  // way the wind is; the banner is what steps at a boundary.
+  tierSky: '#0a141c',
+  tierSea: '#03080d',
+  /** The HUD (spec §7.1's feedback half): tier, wind, score, combo. */
+  hud: '#dce8ee',
+  hudDim: 'rgba(220, 232, 238, 0.55)',
+  hudShadow: 'rgba(6, 14, 20, 0.75)',
+  /** The tier-change banner, and the word a fatal crash ends the run with. */
+  tierFlash: '#9fe8ff',
+  over: '#ff5f57',
   // The three landing verdicts (spec §3.7). Green, amber and red, because the
   // one thing this feedback cannot afford is to need explaining.
   clean: '#5fe0b0',

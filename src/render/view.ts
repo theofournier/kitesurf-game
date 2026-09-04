@@ -7,6 +7,8 @@ import { lineTension } from '../sim/kite.ts'
 import type { SimState } from '../sim/loop.ts'
 import type { Obstacle } from '../sim/obstacles.ts'
 import { LAND_REASON, PHASE, type LandReason, type Phase } from '../sim/rider.ts'
+import { createScoreState, type ScoreState } from '../sim/scoring.ts'
+import { windFraction } from '../sim/wind.ts'
 import type { Wave } from '../sim/world.ts'
 
 /** What a view holds before the first frame: no world, so nothing in it. */
@@ -28,6 +30,18 @@ export interface RenderView extends Snapshot {
   height: number
   speed: number
   wind: number
+  /** Which of the four tiers the rider is in, 1..4 (spec §7.1). */
+  tier: number
+  /**
+   * How far up the whole wind curve this run has got, 0..1. The sliding half of
+   * the tier feedback — the water darkens with every metre, where the tier
+   * banner and the score multiplier step at the boundary.
+   */
+  windTint: number
+  /** The run's score, its combo and its records, by reference (spec §8). */
+  score: ScoreState
+  /** True once a fatal crash has ended the run (spec §7.2). */
+  over: boolean
   /** Line load, 0..1 (spec §6.3). */
   tension: number
   /** Which phase of a run the rider is in (spec §3.7). */
@@ -74,6 +88,10 @@ export function createView(): RenderView {
     height: 0,
     speed: 0,
     wind: 0,
+    tier: 1,
+    windTint: 0,
+    score: createScoreState(),
+    over: false,
     tension: 0,
     phase: PHASE.RIDING,
     vSpeed: 0,
@@ -124,6 +142,10 @@ export function interpolateView(
   // rather than for their motion.
   view.speed = state.rider.speed
   view.wind = state.wind
+  view.tier = state.tier
+  view.windTint = windFraction(state.wind)
+  view.score = state.score
+  view.over = state.over
   view.phase = state.rider.phase
   view.vSpeed = state.rider.vSpeed
   view.apex = state.rider.apex

@@ -34,8 +34,8 @@ export function drawScene(
 
   // The flats are drawn a shake wider than the frame on every side, so the
   // translate never uncovers a bare edge.
-  drawSky(ctx, view.width, camera, fx.shake)
-  drawWater(ctx, view.width, view.height, camera, fx.shake)
+  drawSky(ctx, view.width, camera, fx.shake, view.windTint)
+  drawWater(ctx, view.width, view.height, camera, fx.shake, view.windTint)
   drawWaves(ctx, camera, view)
   drawObstacles(ctx, camera, view)
   drawAltitudeShadow(ctx, camera, view)

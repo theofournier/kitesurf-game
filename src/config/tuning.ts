@@ -3,8 +3,13 @@
 // These values are owned by the human. Never edit a value here to make a test
 // pass — if a test and a constant disagree, the test or the formula is wrong.
 export const TUNING = {
-  // wind
+  // wind (spec §7.1)
   WIND_BASE: 12,          // kt, tier 1 — the wind every other value scales from
+  TIER_DIST: [500, 1500, 3000], // m, where tiers 2, 3 and 4 begin
+  TIER_WIND: [18, 25, 35], // kt at the start of each of those tiers
+  TIER_MULT: [1.0, 1.5, 2.5, 4.0], // score multiplier of each tier
+  WIND_TOP: 45,           // kt the open tier climbs toward and never reaches
+  WIND_TOP_M: 3000,       // m past the last boundary that closes half of that gap
 
   // kite
   BASE_SLEW: 90,          // deg/s at 12kt
@@ -55,6 +60,8 @@ export const TUNING = {
   SKETCHY_SPEED_LOSS: 0.25, // share of speed a sketchy landing takes away
   LAND_RECOVER: 0.25,     // s, the landing beat before riding resumes
   WIPEOUT_RECOVER: 2.0,   // s, relaunch beat with the kite down (spec §7.2)
+  RELAUNCH_ANGLE: 80,     // deg, how far out the kite has to be dragged to fly again
+  RELAUNCH_SLEW: 0.4,     // share of the slew rate a kite in the water drags at
 
   // scoring
   HEIGHT_EXP: 1.5,
@@ -109,6 +116,7 @@ export const TUNING = {
   DENSITY_MIN_EXP: 0.5,   // how hard the wind shrinks the minimum gap
   DENSITY_MAX_EXP: 1.2,   // the maximum shrinks faster, so the rhythm tightens
   OBSTACLE_MIX_PIER: 0.25, // share of the non-boat obstacles that are piers, where the wind allows one
+  PIER_TIER: 3,           // first tier whose wind may carry a pier (spec §9.1)
 
   // obstacles (spec §9.1)
   BUOY_H: 0.5,            // m of lethal height

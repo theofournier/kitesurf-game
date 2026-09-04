@@ -41,7 +41,10 @@ export const PHASE = {
   AIRBORNE: 'AIRBORNE',
   /** The beat after a landing that scored — clean or sketchy. */
   LANDING: 'LANDING',
-  /** The beat after a landing that did not: kite down, speed gone (§7.2). */
+  /**
+   * The beat after a landing that did not: kite down in the water, speed gone,
+   * and the relaunch of §7.2 to fly before the run can carry on.
+   */
   WIPEOUT: 'WIPEOUT',
 } as const
 
@@ -570,11 +573,31 @@ function stepWater(rider: RiderState, input: RiderInput, wind: number, dt: numbe
 }
 
 /**
+ * Whether the kite is back out of the water (spec §7.2).
+ *
+ * A relaunch is not a timer alone. The kite is lying in the water where the
+ * crash left it, and it flies again only when the player has dragged it out to
+ * the edge of the window — which is where a real one is relaunched from, and
+ * which is what makes the beat a mild skill check rather than a pause. The
+ * WIPEOUT_RECOVER beat is the floor under it: the kite is not going anywhere
+ * for that long however quickly the player reacts.
+ *
+ * Dragged at RELAUNCH_SLEW of the flying rate, the trip from a kite parked at
+ * zenith — the wipeout the landing table hands out most often — is about as
+ * long as the beat itself, so a player who steers straight away spends the ~2s
+ * the spec asks for and one who does not spends as long as they take.
+ */
+function relaunched(rider: RiderState): boolean {
+  return rider.recover <= 0 && rider.kite.angle >= TUNING.RELAUNCH_ANGLE
+}
+
+/**
  * Phase bookkeeping (spec §3.7), run last so it sees the step it is describing.
  *
  * The air and the two recovery beats own the phase outright; on the water it is
  * only ever a readout of whether the player is edging. LANDING and WIPEOUT are
- * entered by `touchdown` and left here, when their beat runs out.
+ * entered by `touchdown` and left here — a landing when its beat runs out, a
+ * wipeout when the kite is flying again.
  */
 function stepPhase(rider: RiderState, input: RiderInput, dt: number): void {
   if (rider.airborne) {
@@ -585,8 +608,13 @@ function stepPhase(rider: RiderState, input: RiderInput, dt: number): void {
 
   if (rider.recover > 0) {
     rider.recover -= dt
-    if (rider.recover > 0) return
-    rider.recover = 0
+    if (rider.recover < 0) rider.recover = 0
+  }
+
+  if (rider.phase === PHASE.WIPEOUT) {
+    if (!relaunched(rider)) return
+  } else if (rider.recover > 0) {
+    return
   }
 
   rider.phase = input.loading ? PHASE.LOADING : PHASE.RIDING
@@ -597,8 +625,10 @@ function stepPhase(rider: RiderState, input: RiderInput, dt: number): void {
  *
  * The kite slews first and always: steering is live every frame and the load
  * input never gates it (spec §5.2) — including through the air, where it is the
- * only control left, and through a wipeout, where steering the kite back is the
- * whole of the relaunch beat.
+ * only control left, and through a wipeout, where steering the kite back to the
+ * edge of the window is the whole of the relaunch beat. It travels at
+ * RELAUNCH_SLEW of its usual rate while it is down there: a kite being dragged
+ * through water is not a kite being flown.
  *
  * `kicker` is what the water under the board is worth this step (spec §4.2).
  * It defaults to flat water, so every caller that has no world — every physics
@@ -611,7 +641,14 @@ export function stepRider(
   dt: number,
   kicker: Kicker = NO_KICKER,
 ): void {
-  stepKite(rider.kite, targetFromInput(input.kiteTarget), wind, dt)
+  const down = rider.phase === PHASE.WIPEOUT
+  stepKite(
+    rider.kite,
+    targetFromInput(input.kiteTarget),
+    wind,
+    dt,
+    down ? TUNING.RELAUNCH_SLEW : 1,
+  )
 
   if (rider.airborne) stepAir(rider, wind, dt)
   else stepWater(rider, input, wind, dt)

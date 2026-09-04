@@ -1,14 +1,20 @@
 // Fixed-timestep accumulator (spec §11.2). Physics is never tied to frame rate.
 import { TUNING } from '../config/tuning.ts'
 import { createRiderState, stepRider, type RiderState } from './rider.ts'
-import { hitObstacle, type Obstacle } from './obstacles.ts'
+import { hitObstacle, nearestClearance, type Obstacle } from './obstacles.ts'
+import {
+  createScoreState,
+  creditLanding,
+  noteClearance,
+  stepScore,
+  type ScoreState,
+} from './scoring.ts'
+import { tierAt, tierMult, WIND_AUTO, windAt } from './wind.ts'
 import {
   createKicker,
   createWorldState,
   kickerAt,
   stepWorld,
-  WIND_AUTO,
-  windAt,
   type Kicker,
   type WorldState,
 } from './world.ts'
@@ -51,15 +57,28 @@ export interface SimState {
   /** Wind at the rider's distance, kt. Derived, never integrated (spec §7.1). */
   wind: number
   /**
+   * Which of the four tiers that distance falls in, 1..4. Derived from `x` like
+   * the wind is, and the multiplier a jump is scored at (spec §7.1, §8.1).
+   */
+  tier: number
+  /** The run's score, its combo and its records (spec §8). */
+  score: ScoreState
+  /**
    * The obstacle the rider ran into on this step, or null for a clean pass
-   * (spec §9.1).
-   *
-   * Recorded rather than acted on. Contact is fatal and a fatal crash ends the
-   * run, but the run structure that ends is spec §7.2's and lands with the
-   * tiers — so this is the sim reporting what happened, and nothing reads it
-   * yet but the debug panel and the tests.
+   * (spec §9.1). Held after the crash, so what ended the run can be named.
    */
   hit: Obstacle | null
+  /**
+   * True once the rider has hit something (spec §7.2). Contact with a boat, a
+   * buoy or a pier is fatal and the run is over: `step` does nothing at all
+   * from here, so the world the crash happened in is exactly what the game-over
+   * screen draws over.
+   *
+   * The other crash, a wipeout, is not this: it costs the speed and the combo
+   * and hands the kite back after the relaunch beat. That split is what makes
+   * endless work — risk lives in the line, not in the trick.
+   */
+  over: boolean
   /**
    * Debug: forces `wind` to a fixed kt, ignoring distance. WIND_AUTO leaves the
    * curve alone, and that is what every run starts on — a recorded run replays
@@ -82,7 +101,10 @@ export function createSimState(seed: number = DEFAULT_SEED): SimState {
     world: createWorldState(seed),
     kicker: createKicker(),
     wind: TUNING.WIND_BASE,
+    tier: tierAt(0),
+    score: createScoreState(),
     hit: null,
+    over: false,
     windOverride: WIND_AUTO,
   }
 }
@@ -104,9 +126,14 @@ export function createAccumulator(): Accumulator {
  * the update loop must not allocate (spec §11.4).
  */
 export function step(state: SimState, input: RiderInput, dt: number): SimState {
+  // A fatal crash ends the run outright (spec §7.2). Nothing moves after it:
+  // the tick, the clock and the score all stop where the rider did.
+  if (state.over) return state
+
   state.tick += 1
   state.time += dt
   state.wind = windAt(state.rider.x, state.windOverride)
+  state.tier = tierAt(state.rider.x)
 
   // The kicker is read at the top of the step, from the position and speed the
   // rider arrived with, and the release inside stepRider spends it. That leaves
@@ -123,6 +150,27 @@ export function step(state: SimState, input: RiderInput, dt: number): SimState {
 
   stepRider(state.rider, input, state.wind, dt, state.kicker)
 
+  // Scored off the same swept path the collision test uses, and before it: the
+  // metre the rider travelled into a boat is a metre they travelled, and an air
+  // that shaved a mast on the way is owed the near miss whichever way it ends.
+  noteClearance(
+    state.score,
+    nearestClearance(state.world.obstacles, fromX, fromAlt, state.rider.x, state.rider.altitude),
+    state.rider.x,
+  )
+  if (state.rider.landings !== state.score.landings) {
+    creditLanding(
+      state.score,
+      state.rider.apex,
+      state.rider.landingQuality,
+      state.rider.lastKicker,
+      state.rider.x,
+      tierMult(state.tier),
+      state.rider.landings,
+    )
+  }
+  stepScore(state.score, state.rider.x)
+
   state.hit = hitObstacle(
     state.world.obstacles,
     fromX,
@@ -130,6 +178,8 @@ export function step(state: SimState, input: RiderInput, dt: number): SimState {
     state.rider.x,
     state.rider.altitude,
   )
+  if (state.hit !== null) state.over = true
+
   return state
 }
 
