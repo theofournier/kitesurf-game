@@ -8,14 +8,17 @@
 // and nothing here is allowed to grow into them. What the end of a run has to
 // say belongs to [overlay.ts](overlay.ts) for the same reason: this is the
 // readout of a run in progress. What is here is the live state of the two
-// multipliers the player is steering with, plus the tier banner that spec §7.1
-// asks a boundary to announce itself with.
+// multipliers the player is steering with, the tier banner that spec §7.1 asks
+// a boundary to announce itself with, and the height of the air the rider is
+// currently in — the one number that is drawn beside the rider rather than in a
+// corner, because it is about them and not about the run.
 //
 // Every string it draws is cached against the rounded number that produced it,
 // so a frame that changes nothing allocates nothing — the same reasoning as the
 // spray pool, applied to text.
 import { TUNING } from '../config/tuning.ts'
 import { PHASE } from '../sim/rider.ts'
+import { mirrorX, type Camera } from './camera.ts'
 import { TIER_FLASH_TIME, verdictColor, type Effects } from './effects.ts'
 import { PALETTE } from './palette.ts'
 import type { RenderView } from './view.ts'
@@ -63,6 +66,41 @@ const RELAUNCH_FONT = `bold ${RELAUNCH_PX}px system-ui, -apple-system, sans-seri
 const RELAUNCH_Y = 0.3
 
 /**
+ * The live height of the air the rider is in, drawn beside them.
+ *
+ * It sits *behind* the rider. Ahead is where the water they are about to land
+ * on is, and where the next obstacle comes from; behind is the empty side of a
+ * frame anchored at ANCHOR_X, and putting a number there costs the player
+ * nothing they were looking at.
+ *
+ * `RISE` is measured up from the board, which lands it around the harness — high
+ * enough to clear the spray thrown at the touchdown, low enough that it is still
+ * reading as part of the rider rather than as something in the sky.
+ */
+const ALT_PX = 20
+const ALT_FONT = `bold ${ALT_PX}px system-ui, -apple-system, sans-serif`
+const ALT_BEHIND = 58
+const ALT_RISE = 24
+/**
+ * Height below which there is no air to report, m. A touchdown and a takeoff
+ * both cross zero, and a readout that appeared for two frames at 0.0m on either
+ * side of every landing would be a flicker rather than a number.
+ */
+const ALT_MIN_M = 0.15
+/** Tenths of a metre: what a height is rounded to before it is drawn. */
+const ALT_ROUND = 10
+
+/**
+ * The height of the air just finished, in the corner with the rest of the run.
+ *
+ * The live number beside the rider goes out the moment they touch down, which
+ * is the moment they want to know what it was. This is the half that stays: the
+ * peak of the last air, held until the next one lands on top of it, next to the
+ * score it earned.
+ */
+const LAST_LABEL = 'LAST'
+
+/**
  * Tier names, indexed by tier. A fixed table rather than a formatted string:
  * there are only ever four of them, and this way the common case draws without
  * touching the allocator at all.
@@ -91,6 +129,10 @@ export interface Hud {
   jumpValue: number
   banner: string
   bannerWind: number
+  alt: string
+  altValue: number
+  last: string
+  lastValue: number
 }
 
 export function createHud(): Hud {
@@ -118,6 +160,10 @@ export function resetHud(hud: Hud): Hud {
   hud.jumpValue = Number.NaN
   hud.banner = ''
   hud.bannerWind = Number.NaN
+  hud.alt = ''
+  hud.altValue = Number.NaN
+  hud.last = ''
+  hud.lastValue = Number.NaN
   return hud
 }
 
@@ -178,6 +224,21 @@ function format(hud: Hud, view: RenderView): void {
     hud.bannerWind = wind
     hud.banner = `${wind}kt`
   }
+
+  // Height to a tenth. Whole metres would sit still through most of an air —
+  // the number is there to be watched climbing — and anything finer is a blur
+  // at the speed a pop puts on it.
+  const altitude = Math.round(view.altitude * ALT_ROUND)
+  if (altitude !== hud.altValue) {
+    hud.altValue = altitude
+    hud.alt = `${(altitude / ALT_ROUND).toFixed(1)}m`
+  }
+
+  const last = Math.round(view.score.lastApex * ALT_ROUND)
+  if (last !== hud.lastValue) {
+    hud.lastValue = last
+    hud.last = `${LAST_LABEL} ${(last / ALT_ROUND).toFixed(1)}m`
+  }
 }
 
 /**
@@ -190,6 +251,7 @@ function format(hud: Hud, view: RenderView): void {
 export function drawHud(
   ctx: CanvasRenderingContext2D,
   hud: Hud,
+  camera: Camera,
   view: RenderView,
   fx: Effects,
 ): void {
@@ -208,9 +270,44 @@ export function drawHud(
     label(ctx, hud.combo, PAD, comboY, TIER_FONT, PALETTE.tierFlash)
   }
 
+  // Nothing to report until an air has actually finished. A run that opens on
+  // "LAST 0.0m" is telling the player about a jump they have not taken.
+  if (view.score.landings > 0) {
+    label(ctx, hud.last, PAD, comboY + LINE, SMALL_FONT, PALETTE.hudDim)
+  }
+
   drawJump(ctx, hud, view, fx, comboY)
+  drawAltitude(ctx, hud, camera, view)
   drawTierBanner(ctx, hud, view, fx)
   drawRelaunch(ctx, view)
+}
+
+/**
+ * How high the rider is right now, beside them, for as long as they are up
+ * there.
+ *
+ * The counterpart to the jump PB line of spec §8.4: the line says what there is
+ * to beat and this says where you are against it, both while you are still
+ * rising. On the water it says nothing at all — a 0.0m that is on screen more
+ * often than not is a number nobody reads.
+ *
+ * Drawn outside the §6.5 world mirror, like the verdict word, so the anchor has
+ * to be mirrored by hand — and the offset with it, because "behind the rider"
+ * changes sides when the run does.
+ */
+function drawAltitude(
+  ctx: CanvasRenderingContext2D,
+  hud: Hud,
+  camera: Camera,
+  view: RenderView,
+): void {
+  if (view.altitude < ALT_MIN_M) return
+
+  const x = mirrorX(view.width, view.facing, camera.anchorX) - ALT_BEHIND * view.facing
+
+  ctx.textAlign = 'center'
+  label(ctx, hud.alt, x, camera.feetY - ALT_RISE, ALT_FONT, PALETTE.hud)
+  ctx.textAlign = 'left'
 }
 
 /**

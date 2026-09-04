@@ -49,6 +49,16 @@ export interface ScoreState {
   lastJump: number
   /** The clearance multiplier that jump was paid at, 1..1.5 (spec §8.3). */
   lastBonus: number
+  /**
+   * How high the last air went, m — whether or not the rider rode away from it.
+   *
+   * Not the same question as `bestJump`, and deliberately so. That one is the
+   * record of spec §8.4 and counts landed airs only; this is a readout of what
+   * just happened, and a 9m send that ended in a wipeout is still a 9m send the
+   * player wants to be told about. Kept beside `lastJump` and `lastBonus`
+   * because the three are one answer: how high, what it was worth, and why.
+   */
+  lastApex: number
   /** Highest apex landed so far, m — the jump PB of spec §8.4. */
   bestJump: number
   /**
@@ -77,6 +87,7 @@ export function resetScoreState(score: ScoreState): ScoreState {
   score.clearance = Infinity
   score.lastJump = 0
   score.lastBonus = 1
+  score.lastApex = 0
   score.bestJump = 0
   score.landings = 0
   return score
@@ -200,6 +211,7 @@ export function creditLanding(
   score.landings = landings
   score.lastBonus = bonus
   score.lastJump = value
+  score.lastApex = apex
   score.jumps += value
   score.clearance = Infinity
 

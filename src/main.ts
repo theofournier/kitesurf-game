@@ -296,7 +296,7 @@ function frame(now: number): void {
 
   // The readout is a readout of a run: there is nothing for it to say before
   // one has started, and the select screen is quieter without it.
-  if (session.phase !== RUN.SELECT) drawHud(ctx, session.hud, view, effects)
+  if (session.phase !== RUN.SELECT) drawHud(ctx, session.hud, camera, view, effects)
 
   if (session.phase === RUN.SELECT) {
     drawSelect(ctx, session.overlay, view, session.records)

@@ -3,6 +3,7 @@
 // the word a fatal crash ends on.
 import { describe, expect, it } from 'vitest'
 import { TUNING } from '../../src/config/tuning.ts'
+import { createCamera, updateCamera } from '../../src/render/camera.ts'
 import { createEffects, TIER_FLASH_TIME } from '../../src/render/effects.ts'
 import { createHud, drawHud, tierLabel } from '../../src/render/hud.ts'
 import { createView } from '../../src/render/view.ts'
@@ -11,12 +12,12 @@ import { PHASE } from '../../src/sim/rider.ts'
 const W = 1200
 const H = 800
 
-/** Records the text one HUD pass lays down. */
-function draw(build: (view: ReturnType<typeof createView>) => void, tierFlash = 0, flash = 0) {
-  const texts: string[] = []
+/** Records the text one HUD pass lays down, and where each piece went. */
+function lay(build: (view: ReturnType<typeof createView>) => void, tierFlash = 0, flash = 0) {
+  const said: { text: string; x: number; y: number }[] = []
   const noop = () => {}
   const ctx = {
-    fillText: (text: string) => void texts.push(text),
+    fillText: (text: string, x: number, y: number) => void said.push({ text, x, y }),
     fillRect: noop,
     fillStyle: '',
     font: '',
@@ -36,9 +37,16 @@ function draw(build: (view: ReturnType<typeof createView>) => void, tierFlash = 
   fx.flash = flash
   fx.quality = TUNING.CLEAN_QUALITY
 
-  drawHud(ctx, createHud(), view, fx)
-  // Each label is drawn twice, once for its halo — the set is what was said.
-  return new Set(texts)
+  const camera = createCamera()
+  updateCamera(camera, W, H, view.x, view.altitude, 1)
+
+  drawHud(ctx, createHud(), camera, view, fx)
+  return { said, camera }
+}
+
+/** Just what one HUD pass said. Each label is drawn twice, once for its halo. */
+function draw(build: (view: ReturnType<typeof createView>) => void, tierFlash = 0, flash = 0) {
+  return new Set(lay(build, tierFlash, flash).said.map((one) => one.text))
 }
 
 describe('drawHud', () => {
@@ -125,6 +133,130 @@ describe('drawHud', () => {
   })
 })
 
+describe('the height of the last air (in the corner)', () => {
+  it('reports the peak of the air that just finished', () => {
+    const said = draw((view) => {
+      view.score.landings = 1
+      view.score.lastApex = 6.44
+    })
+
+    expect(said).toContain('LAST 6.4m')
+  })
+
+  it('says nothing before the first air of a run has landed', () => {
+    // A run that opens on "LAST 0.0m" is telling the player about a jump they
+    // have not taken.
+    const fresh = draw(() => {})
+    expect([...fresh].some((text) => text.startsWith('LAST'))).toBe(false)
+  })
+
+  it('holds through the next air rather than resetting under it', () => {
+    // The live number beside the rider is the one that tracks the air in
+    // progress; this one is what the *last* one came to, and it has to still be
+    // there while the next is being flown.
+    const said = draw((view) => {
+      view.score.landings = 3
+      view.score.lastApex = 6.4
+      view.altitude = 2.1
+    })
+
+    expect(said).toContain('LAST 6.4m')
+    expect(said).toContain('2.1m')
+  })
+
+  it('reports a height the rider did not ride away from', () => {
+    // `bestJump` is the record of §8.4 and counts landed airs only. This is a
+    // readout of what just happened, and a big send that ended badly is still
+    // a big send the player wants to be told about.
+    const said = draw((view) => {
+      view.score.landings = 1
+      view.score.lastApex = 9.2
+      view.score.bestJump = 4
+      view.landingQuality = 0
+    })
+
+    expect(said).toContain('LAST 9.2m')
+  })
+
+  it('sits under the combo, in the run readout', () => {
+    const { said } = lay((view) => {
+      view.score.landings = 1
+      view.score.lastApex = 6.4
+      view.score.combo = 5
+    })
+    const combo = said.findLast((one) => one.text === '5x')!
+    const last = said.findLast((one) => one.text === 'LAST 6.4m')!
+
+    expect(last.x).toBe(combo.x)
+    expect(last.y).toBeGreaterThan(combo.y)
+  })
+})
+
+describe('the height of the air (beside the rider)', () => {
+  /**
+   * What the height readout said this frame, and where, or null for silence.
+   *
+   * The last match rather than the first: `label` lays a dark halo down at a
+   * one-pixel offset before the text itself, so it is the second of the pair
+   * that sits where the number really is.
+   */
+  function altitude(build: (view: ReturnType<typeof createView>) => void) {
+    const { said, camera } = lay(build)
+    return { at: said.findLast((one) => /^\d+\.\dm$/.test(one.text)) ?? null, camera }
+  }
+
+  it('says how high the rider is, to a tenth of a metre', () => {
+    expect(altitude((view) => void (view.altitude = 6.44)).at?.text).toBe('6.4m')
+    expect(altitude((view) => void (view.altitude = 12.06)).at?.text).toBe('12.1m')
+  })
+
+  it('says nothing at all while the board is on the water', () => {
+    // A 0.0m that is on screen more often than not is a number nobody reads —
+    // and both a takeoff and a touchdown cross zero.
+    expect(altitude((view) => void (view.altitude = 0)).at).toBeNull()
+    expect(altitude((view) => void (view.altitude = 0.05)).at).toBeNull()
+    expect(altitude((view) => void (view.altitude = 1)).at).not.toBeNull()
+  })
+
+  it('sits beside the rider rather than in a corner of the frame', () => {
+    const { at, camera } = altitude((view) => void (view.altitude = 8))
+
+    // Close enough to the rider to be read as part of them, and above the board
+    // so the landing spray does not come up through it.
+    expect(Math.abs(at!.x - camera.anchorX)).toBeLessThan(100)
+    expect(at!.y).toBeLessThan(camera.feetY)
+    expect(camera.feetY - at!.y).toBeLessThan(TUNING.RIDER_H)
+  })
+
+  it('travels with the rider up the frame', () => {
+    const low = altitude((view) => void (view.altitude = 2))
+    const high = altitude((view) => void (view.altitude = 12))
+
+    // The camera follows altitude at CAM_ALT_FOLLOW, so the rider visibly rises
+    // in frame (spec §6.4) and the number rises with them.
+    expect(high.at!.y).toBeLessThan(low.at!.y)
+    expect(high.camera.feetY).toBeLessThan(low.camera.feetY)
+  })
+
+  it('stays on the empty side of the rider when the run mirrors (spec §6.5)', () => {
+    const right = altitude((view) => {
+      view.altitude = 8
+      view.facing = 1
+    })
+    const left = altitude((view) => {
+      view.altitude = 8
+      view.facing = -1
+    })
+
+    // Behind the rider is the side away from the water they are about to land
+    // on, and it changes sides when the run does. The text itself is drawn
+    // outside the world mirror, so it reads forwards either way.
+    expect(right.at!.x).toBeLessThan(right.camera.anchorX)
+    expect(left.at!.x).toBeGreaterThan(W - left.camera.anchorX)
+    expect(left.at!.x).toBe(W - right.at!.x)
+  })
+})
+
 describe('the string cache', () => {
   it('rebuilds a label only when the number a player can read has moved', () => {
     const hud = createHud()
@@ -146,7 +278,10 @@ describe('the string cache', () => {
       globalAlpha: 1,
     } as unknown as CanvasRenderingContext2D
 
-    drawHud(ctx, hud, view, createEffects())
+    const camera = createCamera()
+    updateCamera(camera, W, H, view.x, view.altitude, 1)
+
+    drawHud(ctx, hud, camera, view, createEffects())
     const stat = hud.stat
     const score = hud.score
 
@@ -156,13 +291,13 @@ describe('the string cache', () => {
     view.speed = 12.31
     view.x = 100.4
     view.score.total = 40.4
-    drawHud(ctx, hud, view, createEffects())
+    drawHud(ctx, hud, camera, view, createEffects())
 
     expect(hud.stat).toBe(stat)
     expect(hud.score).toBe(score)
 
     view.x = 101.9
-    drawHud(ctx, hud, view, createEffects())
+    drawHud(ctx, hud, camera, view, createEffects())
     expect(hud.stat).not.toBe(stat)
     expect(hud.stat).toBe('18kt · 12.3m/s · 102m')
   })

@@ -272,6 +272,39 @@ describe('the combo (spec §8.2)', () => {
   })
 })
 
+describe('what the last touchdown did', () => {
+  it('remembers how high the air went, alongside what it scored', () => {
+    const score = createScoreState()
+    expect(score.lastApex).toBe(0)
+
+    creditLanding(score, 6.4, TUNING.CLEAN_QUALITY, CHOP, 0, TIER_1, 1)
+    expect(score.lastApex).toBe(6.4)
+    expect(score.lastJump).toBeGreaterThan(0)
+  })
+
+  it('remembers an air the rider did not ride away from', () => {
+    // Not the same question as the record of §8.4: `bestJump` counts landed
+    // airs only, while this is a readout of what just happened — and a 9m send
+    // that ended in a wipeout is still a 9m send.
+    const score = createScoreState()
+    creditLanding(score, 9.2, 0, CHOP, 0, TIER_1, 1)
+
+    expect(score.lastApex).toBe(9.2)
+    expect(score.bestJump).toBe(0)
+    expect(score.lastJump).toBe(0)
+  })
+
+  it('is replaced by the next air, not accumulated', () => {
+    const score = createScoreState()
+    creditLanding(score, 9.2, TUNING.CLEAN_QUALITY, CHOP, 0, TIER_1, 1)
+    creditLanding(score, 2.1, TUNING.CLEAN_QUALITY, CHOP, 0, TIER_1, 2)
+
+    expect(score.lastApex).toBe(2.1)
+    // The record it beat stands, which is the difference between the two.
+    expect(score.bestJump).toBe(9.2)
+  })
+})
+
 describe('the clearance bonus (spec §8.3)', () => {
   it('is 1.0 at exactly CLEARANCE_M and 1.5 at nothing at all', () => {
     // The two numbers the spec writes down.
