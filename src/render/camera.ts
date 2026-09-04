@@ -27,7 +27,40 @@ export interface Camera {
 }
 
 export function createCamera(): Camera {
-  return { x: 0, alt: 0, anchorX: 0, feetY: 0, harnessY: 0, waterY: 0, horizonY: 0 }
+  return resetCamera({} as Camera)
+}
+
+/**
+ * Points the camera back at a rider standing at the origin, in place — the
+ * restart of spec §10.
+ *
+ * `alt` is the only field that carries anything over: everything else is
+ * recomputed from scratch by the next `updateCamera`, while the altitude
+ * follow is integrated and would otherwise start the new run easing down from
+ * wherever the last one crashed.
+ */
+export function resetCamera(camera: Camera): Camera {
+  camera.x = 0
+  camera.alt = 0
+  camera.anchorX = 0
+  camera.feetY = 0
+  camera.harnessY = 0
+  camera.waterY = 0
+  camera.horizonY = 0
+  return camera
+}
+
+/**
+ * A screen x, mirrored if the run is going left (spec §6.5).
+ *
+ * The world itself is mirrored by a transform on the context — one flip of the
+ * whole frame, never a second set of signs through the drawing code. This is
+ * for the handful of things that live *outside* that transform and still have
+ * to line up with it: the input anchor, and any text, which would otherwise be
+ * drawn backwards.
+ */
+export function mirrorX(width: number, facing: number, x: number): number {
+  return facing < 0 ? width - x : x
 }
 
 /**

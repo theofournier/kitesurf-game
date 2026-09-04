@@ -56,17 +56,33 @@ export interface KiteState {
 }
 
 export function createKiteState(angle: number = WINDOW_MIN): KiteState {
+  // Written in terms of the reset rather than beside it: a fresh kite and a
+  // restarted one have to be the same kite, and two field lists would be two
+  // chances to disagree. The cast is contained in this one line — every field
+  // is assigned before the object escapes.
+  return resetKiteState({} as KiteState, angle)
+}
+
+/**
+ * Puts a kite back to the start of a run, in place (spec §10's restart).
+ *
+ * Reused rather than reallocated because the restart has a 500ms budget and
+ * because the loop reads the same struct every frame — a run that swapped its
+ * state objects would leave every reference the shell holds pointing at the
+ * run before it.
+ */
+export function resetKiteState(kite: KiteState, angle: number = WINDOW_MIN): KiteState {
   const start = clampAngle(angle)
-  return {
-    angle: start,
-    target: start,
-    aim: start,
-    run: 0,
-    dir: 0,
-    settle: 0,
-    settleFrom: start,
-    overshooting: false,
-  }
+
+  kite.angle = start
+  kite.target = start
+  kite.aim = start
+  kite.run = 0
+  kite.dir = 0
+  kite.settle = 0
+  kite.settleFrom = start
+  kite.overshooting = false
+  return kite
 }
 
 /** Holds an angle inside the window. The kite can never leave 0..90 (spec §3.1). */

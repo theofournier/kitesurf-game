@@ -28,6 +28,16 @@ export interface RenderView extends Snapshot {
   /** Viewport size in CSS px — the coordinate space every draw call works in. */
   width: number
   height: number
+  /**
+   * Which way the run is going: +1 right, -1 left (spec §6.5).
+   *
+   * Chosen before the run and never touched by the sim, which has no idea a
+   * direction exists — riding left is a horizontal mirror of the finished
+   * frame, so this is a fact about the camera and not about the water. That is
+   * why `interpolateView` leaves it alone: the shell sets it when the run
+   * starts and it holds for the length of it.
+   */
+  facing: number
   speed: number
   wind: number
   /** Which of the four tiers the rider is in, 1..4 (spec §7.1). */
@@ -74,7 +84,24 @@ export interface RenderView extends Snapshot {
 }
 
 export function createSnapshot(): Snapshot {
-  return { x: 0, altitude: 0, kiteAngle: 0, kiteTarget: 0, time: 0 }
+  return resetSnapshot({} as Snapshot)
+}
+
+/**
+ * Puts a snapshot back to the first frame of a run, in place (spec §10).
+ *
+ * Both snapshots have to go together with the sim: they are what the frame
+ * interpolates *from*, so one left holding the crash that ended the last run
+ * would draw a single frame of the rider streaking back across the world from
+ * wherever they died.
+ */
+export function resetSnapshot(snapshot: Snapshot): Snapshot {
+  snapshot.x = 0
+  snapshot.altitude = 0
+  snapshot.kiteAngle = 0
+  snapshot.kiteTarget = 0
+  snapshot.time = 0
+  return snapshot
 }
 
 export function createView(): RenderView {
@@ -86,6 +113,7 @@ export function createView(): RenderView {
     time: 0,
     width: 0,
     height: 0,
+    facing: 1,
     speed: 0,
     wind: 0,
     tier: 1,

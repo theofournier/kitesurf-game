@@ -4,10 +4,12 @@
 //
 // It stays deliberately thin. Spec §8.4 puts the *records* in the world rather
 // than in a HUD — a buoy at the distance PB, a line in the sky at the jump PB —
-// and that is a later session's work; nothing here is allowed to grow into it.
-// What is here is the live state of the two multipliers the player is steering
-// with, plus the tier banner that spec §7.1 asks a boundary to announce itself
-// with.
+// so they are drawn by [records.ts](records.ts) among the waves and the boats,
+// and nothing here is allowed to grow into them. What the end of a run has to
+// say belongs to [overlay.ts](overlay.ts) for the same reason: this is the
+// readout of a run in progress. What is here is the live state of the two
+// multipliers the player is steering with, plus the tier banner that spec §7.1
+// asks a boundary to announce itself with.
 //
 // Every string it draws is cached against the rounded number that produced it,
 // so a frame that changes nothing allocates nothing — the same reasoning as the
@@ -46,11 +48,6 @@ const BANNER_PX = 34
 const BANNER_FONT = `bold ${BANNER_PX}px system-ui, -apple-system, sans-serif`
 const BANNER_Y = 0.22
 const BANNER_RISE = 26
-
-/** The word a fatal crash leaves on screen (spec §7.2). */
-const OVER_PX = 40
-const OVER_FONT = `bold ${OVER_PX}px system-ui, -apple-system, sans-serif`
-const OVER_LABEL = 'RUN OVER'
 
 /**
  * The one instruction in the game (spec §7.2).
@@ -94,27 +91,34 @@ export interface Hud {
   jumpValue: number
   banner: string
   bannerWind: number
-  over: string
-  overValue: number
 }
 
 export function createHud(): Hud {
-  return {
-    stat: '',
-    statWind: Number.NaN,
-    statSpeed: Number.NaN,
-    statX: Number.NaN,
-    score: '',
-    scoreValue: Number.NaN,
-    combo: '',
-    comboValue: Number.NaN,
-    jump: '',
-    jumpValue: Number.NaN,
-    banner: '',
-    bannerWind: Number.NaN,
-    over: '',
-    overValue: Number.NaN,
-  }
+  return resetHud({} as Hud)
+}
+
+/**
+ * Empties the string cache, in place — the restart of spec §10.
+ *
+ * The sentinels go back to NaN rather than to 0, which is what makes the cache
+ * correct rather than merely empty: NaN never equals the number a fresh run
+ * produces, so the first frame of one rebuilds every label. Zero would match a
+ * zeroed score and leave the empty string standing.
+ */
+export function resetHud(hud: Hud): Hud {
+  hud.stat = ''
+  hud.statWind = Number.NaN
+  hud.statSpeed = Number.NaN
+  hud.statX = Number.NaN
+  hud.score = ''
+  hud.scoreValue = Number.NaN
+  hud.combo = ''
+  hud.comboValue = Number.NaN
+  hud.jump = ''
+  hud.jumpValue = Number.NaN
+  hud.banner = ''
+  hud.bannerWind = Number.NaN
+  return hud
 }
 
 /** The tier label for a tier, held inside the table however the table moves. */
@@ -124,7 +128,7 @@ export function tierLabel(tier: number): string {
 }
 
 /** Draws `text` with the dark halo that keeps it legible over sky and sea. */
-function label(
+export function label(
   ctx: CanvasRenderingContext2D,
   text: string,
   x: number,
@@ -174,11 +178,6 @@ function format(hud: Hud, view: RenderView): void {
     hud.bannerWind = wind
     hud.banner = `${wind}kt`
   }
-
-  if (view.over && total !== hud.overValue) {
-    hud.overValue = total
-    hud.over = `${total} · ${x}m`
-  }
 }
 
 /**
@@ -212,7 +211,6 @@ export function drawHud(
   drawJump(ctx, hud, view, fx, comboY)
   drawTierBanner(ctx, hud, view, fx)
   drawRelaunch(ctx, view)
-  drawGameOver(ctx, hud, view)
 }
 
 /**
@@ -275,22 +273,5 @@ function drawTierBanner(
   label(ctx, tierLabel(fx.tier), view.width * 0.5, y, BANNER_FONT, PALETTE.tierFlash)
   label(ctx, hud.banner, view.width * 0.5, y + LINE, SMALL_FONT, PALETTE.hud)
   ctx.globalAlpha = 1
-  ctx.textAlign = 'left'
-}
-
-/**
- * What a fatal crash leaves on the screen (spec §7.2).
- *
- * A placeholder for the game-over screen of §8.4, which owns the records, the
- * restart and the overlay proper. It is here because a run that ends has to say
- * so: the sim stops dead on contact, and a frozen frame with no word on it
- * reads as a bug rather than as a crash.
- */
-function drawGameOver(ctx: CanvasRenderingContext2D, hud: Hud, view: RenderView): void {
-  if (!view.over) return
-
-  ctx.textAlign = 'center'
-  label(ctx, OVER_LABEL, view.width * 0.5, view.height * 0.5, OVER_FONT, PALETTE.over)
-  label(ctx, hud.over, view.width * 0.5, view.height * 0.5 + LINE + 8, SMALL_FONT, PALETTE.hud)
   ctx.textAlign = 'left'
 }

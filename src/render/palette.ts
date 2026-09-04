@@ -58,6 +58,24 @@ export const PALETTE = {
   /** The tier-change banner, and the word a fatal crash ends the run with. */
   tierFlash: '#9fe8ff',
   over: '#ff5f57',
+  // The records of spec §8.4, standing in the world rather than in the HUD: a
+  // buoy at the distance PB and a line in the sky at the jump PB. Cold and pale
+  // where the obstacles are warm and solid, because these two are the one thing
+  // in the water that is not trying to end the run — a marker the same colour
+  // family as a pier would be read as a wall for the half second that matters.
+  // The flash is what a broken record does on its way past (§8.4: it flashes
+  // and the run continues).
+  record: 'rgba(159, 232, 255, 0.55)',
+  recordDim: 'rgba(159, 232, 255, 0.22)',
+  recordFlash: '#ffffff',
+  /**
+   * The overlays either side of a run (spec §8.4, §10): the direction select and
+   * the game-over card. A scrim rather than a fill — the scene is still there
+   * underneath, which is the whole point of drawing over it.
+   */
+  scrim: 'rgba(6, 14, 20, 0.62)',
+  /** What a record beaten this run is badged with. */
+  fresh: '#5fe0b0',
   // The three landing verdicts (spec §3.7). Green, amber and red, because the
   // one thing this feedback cannot afford is to need explaining.
   clean: '#5fe0b0',

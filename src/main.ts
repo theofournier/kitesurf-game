@@ -1,24 +1,24 @@
-// Entry point: canvas surface, fixed-step loop, input adapter, optional debug
-// panel. Wiring only — game logic lives in /src/sim and drawing in /src/render.
+// Entry point: canvas surface, the frame, the input adapters, the lifecycle
+// keys, and the one read and the one write of spec §10's persistence.
+//
+// Wiring only. Game logic lives in /src/sim, drawing in /src/render, and the
+// run lifecycle in [platform/run.ts](platform/run.ts) — which owns everything a
+// frame updates, so what is left here is the half that genuinely needs a
+// browser: a canvas, a device pixel ratio, listeners, and localStorage.
 import { createAnchor } from './input/axis.ts'
 import { createDesktopInput } from './input/desktop.ts'
 import { createTouchInput } from './input/touch.ts'
 import { unlockAudioOnFirstGesture } from './platform/audio.ts'
 import { lockLandscape } from './platform/orientation.ts'
-import {
-  advance,
-  createAccumulator,
-  createInput,
-  createSimState,
-  type SimState,
-} from './sim/loop.ts'
+import { advanceRun, createRun, DIRECTION, RUN, startRun } from './platform/run.ts'
+import { browserStorage, loadRecords, saveRecords } from './platform/storage.ts'
 import { LAND_REASON, PHASE } from './sim/rider.ts'
 import { WIND_AUTO } from './sim/world.ts'
-import { createCamera, updateCamera } from './render/camera.ts'
-import { createEffects, updateEffects } from './render/effects.ts'
-import { createHud, drawHud } from './render/hud.ts'
+import { mirrorX } from './render/camera.ts'
+import { drawHud } from './render/hud.ts'
+import { drawGameOver, drawSelect } from './render/overlay.ts'
 import { drawScene } from './render/scene.ts'
-import { captureSnapshot, createSnapshot, createView, interpolateView } from './render/view.ts'
+import type { SimState } from './sim/loop.ts'
 
 /** Beyond 2x, retina costs fill rate for no visible gain (spec §5.4). */
 const MAX_DPR = 2
@@ -34,27 +34,38 @@ const FPS_SMOOTHING = 0.1
 const WIND_SLIDER_MAX = 45
 const WIND_SLIDER_STEP = 0.5
 
+/**
+ * Keys that are not "any key" (build plan session 10: one key or tap restarts).
+ *
+ * A modifier held down on its own is a player reaching for a shortcut, not a
+ * player asking for another run, and restarting under their hand would take the
+ * shortcut away from them.
+ */
+const MODIFIER_CODES = new Set([
+  'ShiftLeft',
+  'ShiftRight',
+  'ControlLeft',
+  'ControlRight',
+  'AltLeft',
+  'AltRight',
+  'MetaLeft',
+  'MetaRight',
+  'CapsLock',
+  'Tab',
+])
+
 const debugEnabled = new URLSearchParams(window.location.search).get('debug') === '1'
 
 const canvas = document.querySelector<HTMLCanvasElement>('#game')!
 const ctx = canvas.getContext('2d', { alpha: false })!
 
-const state = createSimState()
-const input = createInput()
-const accumulator = createAccumulator()
-
-const camera = createCamera()
-const view = createView()
-const effects = createEffects()
-const hud = createHud()
 /**
- * The two sim snapshots the render interpolates between: `previous` is the
- * state before the most recent step, `pending` is the one being captured for
- * the step about to run. They are swapped rather than copied, so a frame still
- * allocates nothing.
+ * The one read of spec §10, made before the first frame and never repeated.
+ * Everything after this works off the copy the session holds, which is what
+ * keeps a synchronous, main-thread-blocking API off the update path.
  */
-let previous = createSnapshot()
-let pending = createSnapshot()
+const store = browserStorage()
+const session = createRun(loadRecords(store))
 
 /**
  * Both adapters are live at once and write the same struct (spec §5.1). They do
@@ -64,16 +75,37 @@ let pending = createSnapshot()
  * exists.
  */
 const anchor = createAnchor()
-const desktop = createDesktopInput(canvas, input, anchor)
-const touch = createTouchInput(canvas, input, anchor)
+const desktop = createDesktopInput(canvas, session.input, anchor)
+const touch = createTouchInput(canvas, session.input, anchor)
+
+/**
+ * A seed for the next run.
+ *
+ * The clock is the shell's to read, never the sim's — a run stays fully
+ * described by `(seed, inputTrace)` precisely because the seed is handed in
+ * from out here. Without this every run of a session would be the same water,
+ * which is a fine way to tune a wave and a poor way to play five runs in a row.
+ */
+function nextSeed(): number {
+  return Date.now() >>> 0
+}
+
+/** Starts a run, and saves nothing: the write happens when one ends. */
+function ride(direction: number): void {
+  startRun(session, direction, nextSeed())
+  // The rider moved out from under a pointer that did not, and the target is
+  // measured from the rider.
+  desktop.refresh()
+  touch.refresh()
+}
 
 function resize(): void {
   const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR)
-  view.width = canvas.clientWidth
-  view.height = canvas.clientHeight
+  session.view.width = canvas.clientWidth
+  session.view.height = canvas.clientHeight
 
-  const width = Math.round(view.width * dpr)
-  const height = Math.round(view.height * dpr)
+  const width = Math.round(session.view.width * dpr)
+  const height = Math.round(session.view.height * dpr)
   if (canvas.width !== width || canvas.height !== height) {
     canvas.width = width
     canvas.height = height
@@ -106,6 +138,54 @@ function watchDpr(): void {
 }
 
 /**
+ * The lifecycle keys: which way to ride, and how to ride again.
+ *
+ * At the select screen only the two arrows mean anything, because the screen is
+ * asking a question with two answers. At the game-over card everything means
+ * "again" — that is build plan session 10's one key, no confirm dialog — and
+ * the arrows keep their meaning on top of it, so a player who wants the other
+ * side does not have to go back through a menu to get it.
+ */
+function onLifecycleKey(event: KeyboardEvent): void {
+  // A held key repeats. The phase check below would swallow the repeats anyway,
+  // but a restart is not something to leave resting on that.
+  if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return
+
+  const left = event.code === 'ArrowLeft' || event.code === 'KeyA'
+  const right = event.code === 'ArrowRight' || event.code === 'KeyD'
+
+  if (session.phase === RUN.SELECT) {
+    if (left) ride(DIRECTION.LEFT)
+    else if (right) ride(DIRECTION.RIGHT)
+    return
+  }
+
+  if (session.phase !== RUN.OVER || MODIFIER_CODES.has(event.code)) return
+  ride(left ? DIRECTION.LEFT : right ? DIRECTION.RIGHT : session.direction)
+}
+
+/**
+ * The same, by thumb (spec §5.3).
+ *
+ * At the select screen the side of the screen tapped is the side ridden, which
+ * needs no legend beyond the two words already on it. At the game-over card any
+ * tap goes again.
+ *
+ * Bound after both input adapters so it runs after them: they will have set the
+ * load from this very tap, and `startRun` drops it — a tap that restarts the
+ * game is a tap, not the beginning of an edge.
+ */
+function onLifecyclePointer(event: PointerEvent): void {
+  if (session.phase === RUN.SELECT) {
+    const rect = canvas.getBoundingClientRect()
+    ride(event.clientX - rect.left < rect.width * 0.5 ? DIRECTION.LEFT : DIRECTION.RIGHT)
+    return
+  }
+
+  if (session.phase === RUN.OVER) ride(session.direction)
+}
+
+/**
  * Watched in the debug panel: the values the window is tuned against (build
  * plan session 3), what the load and pop are doing (session 4), the air and the
  * landing verdict (session 5), the kicker the last pop came off and how far from
@@ -122,10 +202,12 @@ function watchDpr(): void {
  * `hit` the one that ended the run — contact is fatal (spec §7.2), so `over`
  * goes with it. Then the run structure of session 9: which tier the distance
  * has reached, and the score, combo and near-miss bonus that tier is paying
- * (§7.1, §8). Pre-allocated, and only written when the panel is up, so the loop
- * stays allocation-free either way — `state`, `reason`, `hit` and `over` are
- * seeded with strings so the panel builds string monitors for them rather than
- * numeric ones.
+ * (§7.1, §8). Last the lifecycle of session 10: which of the three states the
+ * session is in, which way it is riding, the seed it is riding on, and the two
+ * records standing in the water (§8.4, §10). Pre-allocated, and only written
+ * when the panel is up, so the loop stays allocation-free either way — `state`,
+ * `reason`, `hit`, `over` and `run` are seeded with strings so the panel builds
+ * string monitors for them rather than numeric ones.
  */
 const readout = {
   kiteAngle: 0,
@@ -154,6 +236,11 @@ const readout = {
   clearBonus: 0,
   bestJump: 0,
   over: 'no' as string,
+  run: RUN.SELECT as string,
+  facing: 1,
+  seed: 0,
+  pbJump: 0,
+  pbDistance: 0,
   fps: 0,
   tick: 0,
   time: 0,
@@ -191,29 +278,34 @@ function frame(now: number): void {
   const frameTime = previousTime === 0 ? 0 : (now - previousTime) / MS_PER_SECOND
   previousTime = now
 
-  captureSnapshot(pending, state)
-  const steps = advance(accumulator, state, input, frameTime)
-  // On a frame that ran no step there is nothing new to interpolate from, and
-  // `previous` must keep pointing at the step before the current state.
-  if (steps > 0) {
-    const spent = previous
-    previous = pending
-    pending = spent
-  }
+  // The one write of spec §10, on the one frame a run ends. Everything the card
+  // about to be drawn needs is already in memory; this is only the disk
+  // catching up, and it is why storage never appears on the update path.
+  if (advanceRun(session, frameTime)) saveRecords(store, session.best)
 
-  interpolateView(view, previous, state, accumulator.alpha)
-  updateCamera(camera, view.width, view.height, view.x, view.altitude, frameTime)
+  const { camera, effects, view } = session
 
   // The input maps the pointer to an angle around the point the lines converge
-  // on, which is where the camera has just put it.
-  anchor.x = camera.anchorX
+  // on, which is where the camera has just put it — mirrored with the rest of
+  // the world when the run is going left (spec §6.5).
+  anchor.x = mirrorX(view.width, session.direction, camera.anchorX)
   anchor.y = camera.harnessY
+  anchor.facing = session.direction
 
-  updateEffects(effects, camera, view, frameTime)
-  drawScene(ctx, camera, view, effects)
-  drawHud(ctx, hud, view, effects)
+  drawScene(ctx, camera, view, effects, session.marks)
+
+  // The readout is a readout of a run: there is nothing for it to say before
+  // one has started, and the select screen is quieter without it.
+  if (session.phase !== RUN.SELECT) drawHud(ctx, session.hud, view, effects)
+
+  if (session.phase === RUN.SELECT) {
+    drawSelect(ctx, session.overlay, view, session.records)
+  } else if (session.phase === RUN.OVER) {
+    drawGameOver(ctx, session.overlay, view, session.records, session.breaks)
+  }
 
   if (debugEnabled) {
+    const state = session.state
     if (frameTime > 0) {
       readout.fps += (1 / frameTime - readout.fps) * FPS_SMOOTHING
     }
@@ -243,16 +335,26 @@ function frame(now: number): void {
     readout.clearBonus = state.score.lastBonus
     readout.bestJump = state.score.bestJump
     readout.over = state.over ? 'RUN OVER' : 'no'
+    readout.run = session.phase
+    readout.facing = session.direction
+    readout.seed = session.seed
+    readout.pbJump = session.records.jump
+    readout.pbDistance = session.records.distance
     readout.tick = state.tick
     readout.time = state.time
-    readout.steps = steps
-    readout.alpha = accumulator.alpha
+    readout.steps = session.steps
+    readout.alpha = session.accumulator.alpha
   }
 }
 
 new ResizeObserver(resize).observe(canvas)
 resize()
 watchDpr()
+
+// Bound after the two input adapters, so the lifecycle handler runs after them
+// and `startRun` has the last word on what the player is holding.
+window.addEventListener('keydown', onLifecycleKey)
+canvas.addEventListener('pointerdown', onLifecyclePointer)
 
 // Spec §5.4. The lock is best-effort — the rotate prompt in index.html is the
 // half that always works — and the audio context can only be opened from inside
@@ -267,7 +369,7 @@ if (debugEnabled) {
   void import('./debug/panel.ts').then((panel) =>
     panel.createDebugPanel(readout, [
       {
-        target: state,
+        target: session.state,
         key: 'windOverride',
         label: `wind kt (${WIND_AUTO} = curve)`,
         min: WIND_AUTO,

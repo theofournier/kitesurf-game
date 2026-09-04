@@ -1,19 +1,22 @@
 // Fixed-timestep accumulator (spec §11.2). Physics is never tied to frame rate.
 import { TUNING } from '../config/tuning.ts'
-import { createRiderState, stepRider, type RiderState } from './rider.ts'
+import { createRiderState, resetRiderState, stepRider, type RiderState } from './rider.ts'
 import { hitObstacle, nearestClearance, type Obstacle } from './obstacles.ts'
 import {
   createScoreState,
   creditLanding,
   noteClearance,
+  resetScoreState,
   stepScore,
   type ScoreState,
 } from './scoring.ts'
 import { tierAt, tierMult, WIND_AUTO, windAt } from './wind.ts'
 import {
+  clearKicker,
   createKicker,
   createWorldState,
   kickerAt,
+  resetWorldState,
   stepWorld,
   type Kicker,
   type WorldState,
@@ -94,27 +97,78 @@ export interface Accumulator {
 }
 
 export function createSimState(seed: number = DEFAULT_SEED): SimState {
-  return {
-    tick: 0,
-    time: 0,
+  // The structs a run owns are built once here; what a *fresh* run is, is
+  // `resetSimState` and nothing else — so starting the game and restarting it
+  // cannot end up meaning two different things (spec §10).
+  const state = {
     rider: createRiderState(),
     world: createWorldState(seed),
     kicker: createKicker(),
-    wind: TUNING.WIND_BASE,
-    tier: tierAt(0),
     score: createScoreState(),
-    hit: null,
-    over: false,
     windOverride: WIND_AUTO,
-  }
+  } as SimState
+
+  return resetSimState(state, seed)
+}
+
+/**
+ * Puts a run back to its first step, in place, on `seed` (spec §10).
+ *
+ * Every struct a run owns is reused rather than replaced. Two reasons, and both
+ * are hard requirements rather than economies: the restart has a 500ms budget
+ * that rebuilding two object pools would eat into for no gain, and the shell
+ * holds references to these objects — the debug panel binds straight to
+ * `windOverride`, and the renderer reads `world.waves` by reference every frame
+ * — so a restart that swapped them would leave half the app pointed at the
+ * previous run.
+ *
+ * `windOverride` survives for that second reason made concrete. It is not part
+ * of a run at all: it belongs to the debug session, which is the one thing that
+ * restarts over and over, and clearing it would silently disagree with the
+ * slider still showing the value the human set.
+ */
+export function resetSimState(state: SimState, seed: number = DEFAULT_SEED): SimState {
+  state.tick = 0
+  state.time = 0
+  resetRiderState(state.rider)
+  resetWorldState(state.world, seed)
+  clearKicker(state.kicker)
+  state.wind = TUNING.WIND_BASE
+  state.tier = tierAt(0)
+  resetScoreState(state.score)
+  state.hit = null
+  state.over = false
+  return state
 }
 
 export function createInput(): RiderInput {
   return { kiteTarget: 0, loading: false }
 }
 
+/**
+ * Drops whatever the player was holding, in place — the restart's half of the
+ * input contract (spec §10).
+ *
+ * Only the load is cleared. `kiteTarget` is an absolute mapping (spec §5.2):
+ * the hand or thumb is still wherever it is, and that angle is as true of the
+ * new run as it was of the old one. The hold is not — a tap that restarts the
+ * game is a tap, not the beginning of an edge — so it is dropped, and the
+ * adapter that owns the button re-asserts the truth on the next release.
+ */
+export function resetInput(input: RiderInput): RiderInput {
+  input.loading = false
+  return input
+}
+
 export function createAccumulator(): Accumulator {
   return { acc: 0, alpha: 0 }
+}
+
+/** Drops the leftover time of the run that just ended, in place. */
+export function resetAccumulator(a: Accumulator): Accumulator {
+  a.acc = 0
+  a.alpha = 0
+  return a
 }
 
 /**

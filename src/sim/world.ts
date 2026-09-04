@@ -24,7 +24,7 @@ import { tierWind, WIND_AUTO, windAt } from './wind.ts'
 // The kicker struct and the three wave types live in kicker.ts so that rider.ts
 // can have them without importing the world (see the note there). They are part
 // of this module's surface all the same: a wave is what carries a kicker.
-export { createKicker, NO_KICKER, WAVE, type Kicker, type WaveType } from './kicker.ts'
+export { clearKicker, createKicker, NO_KICKER, WAVE, type Kicker, type WaveType } from './kicker.ts'
 
 // The wind curve lives in wind.ts so that scoring.ts can price a jump by the
 // tier it was taken in without importing the sea it was taken off. It is part
@@ -209,15 +209,36 @@ export function createWorldState(seed: number): WorldState {
   const obstacles: Obstacle[] = []
   for (let i = 0; i < OBSTACLE_POOL; i++) obstacles.push(createObstacle())
 
+  // Only the pools are built here. Everything else about a fresh world is what
+  // `resetWorldState` says it is, so a first run and a restarted one lay down
+  // the same water from the same seed.
   const rng = new Rng(seed)
+  return resetWorldState({ waves, obstacles, spawnX: 0, obstacleX: 0, clearX: 0, rng }, seed)
+}
+
+/**
+ * Empties the world and re-seeds it, in place (spec §10's restart).
+ *
+ * The pools are kept and their slots simply retired: they are the only
+ * allocation this module ever makes, and a restart that rebuilt them would be
+ * paying for sixteen waves and eight obstacles to get back exactly what it
+ * already had. What makes the reset a reset is the rng — a stream put back to
+ * `seed` lays down the same sea it laid down the first time, which is the whole
+ * of what "a run is (seed, inputTrace)" means.
+ */
+export function resetWorldState(world: WorldState, seed: number): WorldState {
+  for (let i = 0; i < world.waves.length; i++) world.waves[i].active = false
+  for (let i = 0; i < world.obstacles.length; i++) world.obstacles[i].active = false
+
+  world.rng.setState(seed)
+  world.clearX = 0
   // Both streams start with a candidate in hand, drawn here so that the first
   // step of a run has the same two-candidate comparison to make as every step
   // after it. The wind is tier 1 at the start of every run by definition of the
   // curve, so the first obstacle gap is drawn at WIND_BASE.
-  const spawnX = rng.range(TUNING.WAVE_GAP_MIN, TUNING.WAVE_GAP_MAX)
-  const obstacleX = obstacleGap(rng, TUNING.WIND_BASE)
-
-  return { waves, obstacles, spawnX, obstacleX, clearX: 0, rng }
+  world.spawnX = world.rng.range(TUNING.WAVE_GAP_MIN, TUNING.WAVE_GAP_MAX)
+  world.obstacleX = obstacleGap(world.rng, TUNING.WIND_BASE)
+  return world
 }
 
 /**

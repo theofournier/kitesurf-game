@@ -11,6 +11,7 @@ import {
   createKiteState,
   driveFactor,
   liftFactor,
+  resetKiteState,
   stepKite,
   targetFromInput,
   windPower,
@@ -131,29 +132,42 @@ export interface RiderState {
 }
 
 export function createRiderState(): RiderState {
-  return {
-    kite: createKiteState(),
-    speed: 0,
-    x: 0,
-    altitude: 0,
-    vSpeed: 0,
-    load: 0,
-    overload: 0,
-    airborne: false,
-    popForfeit: false,
-    loading: false,
-    lastPop: 0,
-    lastKicker: 1,
-    lastLip: 0,
-    phase: PHASE.RIDING,
-    recover: 0,
-    apex: 0,
-    airTime: 0,
-    descentRate: 0,
-    landingQuality: 0,
-    landingReason: LAND_REASON.NONE,
-    landings: 0,
-  }
+  // Written in terms of the reset for the same reason `createKiteState` is: a
+  // fresh rider and a restarted one are the same rider, and one field list is
+  // one chance to be wrong rather than two.
+  return resetRiderState({ kite: createKiteState() } as RiderState)
+}
+
+/**
+ * Puts a rider back on the water at the start of a run, in place (spec §10).
+ *
+ * The kite goes with them: a run begins with the kite at zenith and nothing
+ * loaded, whatever the last one ended in.
+ */
+export function resetRiderState(rider: RiderState): RiderState {
+  resetKiteState(rider.kite)
+
+  rider.speed = 0
+  rider.x = 0
+  rider.altitude = 0
+  rider.vSpeed = 0
+  rider.load = 0
+  rider.overload = 0
+  rider.airborne = false
+  rider.popForfeit = false
+  rider.loading = false
+  rider.lastPop = 0
+  rider.lastKicker = 1
+  rider.lastLip = 0
+  rider.phase = PHASE.RIDING
+  rider.recover = 0
+  rider.apex = 0
+  rider.airTime = 0
+  rider.descentRate = 0
+  rider.landingQuality = 0
+  rider.landingReason = LAND_REASON.NONE
+  rider.landings = 0
+  return rider
 }
 
 /** Quadratic drag, m/s² (spec §3.3): `drag(speed) = DRAG_K * speed²`. */

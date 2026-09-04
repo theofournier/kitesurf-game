@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { TUNING } from '../../src/config/tuning.ts'
-import { createCamera, updateCamera } from '../../src/render/camera.ts'
+import { createCamera, mirrorX, updateCamera } from '../../src/render/camera.ts'
 import { createEffects } from '../../src/render/effects.ts'
 import { drawScene } from '../../src/render/scene.ts'
 import { createView } from '../../src/render/view.ts'
@@ -16,11 +16,14 @@ interface Rect {
 }
 
 /** Records the fills of one frame — enough to see whether the water moves. */
-function frameAt(riderX: number) {
+function frameAt(riderX: number, facing = 1) {
   const rects: Rect[] = []
+  const scales: { x: number; y: number }[] = []
+  const translates: { x: number; y: number }[] = []
   const noop = () => {}
   const ctx = {
     fillRect: (x: number, y: number, w: number, h: number) => void rects.push({ x, y, w, h }),
+    scale: (x: number, y: number) => void scales.push({ x, y }),
     moveTo: noop,
     lineTo: noop,
     quadraticCurveTo: noop,
@@ -33,7 +36,7 @@ function frameAt(riderX: number) {
     fillText: noop,
     save: noop,
     restore: noop,
-    translate: noop,
+    translate: (x: number, y: number) => void translates.push({ x, y }),
     fillStyle: '',
     strokeStyle: '',
     lineWidth: 0,
@@ -49,10 +52,11 @@ function frameAt(riderX: number) {
   view.width = W
   view.height = H
   view.x = riderX
+  view.facing = facing
   view.wind = TUNING.WIND_BASE
 
   drawScene(ctx, camera, view, createEffects())
-  return { rects, camera }
+  return { rects, camera, scales, translates }
 }
 
 describe('drawScene', () => {
@@ -72,5 +76,33 @@ describe('drawScene', () => {
 
     expect(rider.x + rider.w * 0.5).toBeCloseTo(camera.anchorX, 6)
     expect(rider.y + rider.h).toBeCloseTo(camera.waterY, 6)
+  })
+})
+
+describe('riding left (spec §6.5)', () => {
+  it('is a horizontal mirror of the finished frame, and nothing else', () => {
+    const right = frameAt(42)
+    const left = frameAt(42, -1)
+
+    // One flip of the whole world, applied once, before anything is drawn.
+    expect(right.scales).toEqual([])
+    expect(left.scales).toEqual([{ x: -1, y: 1 }])
+    expect(left.translates[0]).toEqual({ x: W, y: 0 })
+
+    // And no second set of signs anywhere downstream: every shape in the frame
+    // is laid down in exactly the same place, because the transform is what
+    // moves them.
+    expect(left.rects).toEqual(right.rects)
+  })
+
+  it('mirrors the points that live outside the transform with it', () => {
+    // The input anchor and the verdict word are drawn in unmirrored space —
+    // text in a mirror is text backwards — so they are flipped by hand, and
+    // have to land where the mirrored rider actually is.
+    const { camera } = frameAt(42)
+
+    expect(mirrorX(W, 1, camera.anchorX)).toBe(camera.anchorX)
+    expect(mirrorX(W, -1, camera.anchorX)).toBe(W - camera.anchorX)
+    expect(mirrorX(W, -1, mirrorX(W, -1, camera.anchorX))).toBe(camera.anchorX)
   })
 })

@@ -17,7 +17,7 @@
 import { TUNING } from '../config/tuning.ts'
 import { LAND_REASON, type LandReason } from '../sim/rider.ts'
 import { Rng } from '../sim/rng.ts'
-import type { Camera } from './camera.ts'
+import { mirrorX, type Camera } from './camera.ts'
 import { PALETTE } from './palette.ts'
 import type { RenderView } from './view.ts'
 
@@ -140,22 +140,36 @@ export interface Effects {
 }
 
 export function createEffects(): Effects {
-  return {
-    seen: 0,
-    // Tier 1 is where every run starts, so the first frame of one is not a
-    // transition and does not announce itself.
-    tier: 1,
-    tierFlash: 0,
-    quality: 0,
-    reason: LAND_REASON.NONE,
-    flash: 0,
-    shake: 0,
-    shakeX: 0,
-    shakeY: 0,
-    count: 0,
-    spray: new Float32Array(SPRAY_MAX * STRIDE),
-    rng: new Rng(SPRAY_SEED),
-  }
+  const fx = { spray: new Float32Array(SPRAY_MAX * STRIDE), rng: new Rng(SPRAY_SEED) } as Effects
+  return resetEffects(fx)
+}
+
+/**
+ * Clears every effect in flight, in place — the restart of spec §10.
+ *
+ * `seen` and `tier` are the reason this is not optional. Both are edge
+ * detectors against sim counters that a restart puts back to their starting
+ * values, so a new run that inherited them would fire one phantom landing on
+ * its first frame and then stay silent through its first real tier change.
+ *
+ * The particles are not zeroed, only forgotten: `count` is what the draw loop
+ * reads, and the slots past it are dead whatever they hold.
+ */
+export function resetEffects(fx: Effects): Effects {
+  fx.seen = 0
+  // Tier 1 is where every run starts, so the first frame of one is not a
+  // transition and does not announce itself.
+  fx.tier = 1
+  fx.tierFlash = 0
+  fx.quality = 0
+  fx.reason = LAND_REASON.NONE
+  fx.flash = 0
+  fx.shake = 0
+  fx.shakeX = 0
+  fx.shakeY = 0
+  fx.count = 0
+  fx.rng.setState(SPRAY_SEED)
+  return fx
 }
 
 /** Whether a quality reads as clean, sketchy or a wipeout (spec §3.7). */
@@ -319,7 +333,10 @@ export function drawSpray(ctx: CanvasRenderingContext2D, fx: Effects): void {
  * landing only — a ring opening from the board.
  *
  * Drawn outside the shake so the word stays readable while the frame is still
- * moving under it.
+ * moving under it — and outside the §6.5 world mirror with it, which is why the
+ * anchor is mirrored by hand here. A word drawn inside that transform would
+ * come out backwards; a ring drawn outside it has to be told where the rider
+ * ended up.
  */
 export function drawVerdict(
   ctx: CanvasRenderingContext2D,
@@ -331,6 +348,7 @@ export function drawVerdict(
 
   const fade = fx.flash / TUNING.FLASH_TIME
   const color = verdictColor(fx.quality)
+  const anchorX = mirrorX(view.width, view.facing, camera.anchorX)
 
   ctx.fillStyle = color
   ctx.globalAlpha = WASH_ALPHA * fade * fade
@@ -342,7 +360,7 @@ export function drawVerdict(
     ctx.lineWidth = RING_WIDTH
     ctx.beginPath()
     const r = RING_R * (1 - fade)
-    ctx.ellipse(camera.anchorX, camera.feetY, r, r * RING_FLATTEN, 0, 0, Math.PI * 2)
+    ctx.ellipse(anchorX, camera.feetY, r, r * RING_FLATTEN, 0, 0, Math.PI * 2)
     ctx.stroke()
   }
 
@@ -356,7 +374,7 @@ export function drawVerdict(
 
   if (reason === '') {
     ctx.textAlign = 'center'
-    ctx.fillText(label, camera.anchorX, y)
+    ctx.fillText(label, anchorX, y)
   } else {
     // Word and reason are centred as one line rather than the word staying put
     // and the reason hanging off it, so the verdict reads as a single phrase.
@@ -366,11 +384,11 @@ export function drawVerdict(
 
     ctx.textAlign = 'left'
     ctx.font = LABEL_FONT
-    ctx.fillText(label, camera.anchorX - left, y)
+    ctx.fillText(label, anchorX - left, y)
 
     ctx.font = REASON_FONT
     ctx.globalAlpha = fade * REASON_ALPHA
-    ctx.fillText(reason, camera.anchorX - left + labelWidth + REASON_GAP, y)
+    ctx.fillText(reason, anchorX - left + labelWidth + REASON_GAP, y)
   }
 
   ctx.globalAlpha = 1

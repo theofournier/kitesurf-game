@@ -60,17 +60,26 @@ export interface ScoreState {
 }
 
 export function createScoreState(): ScoreState {
-  return {
-    total: 0,
-    jumps: 0,
-    combo: 1,
-    comboX: 0,
-    clearance: Infinity,
-    lastJump: 0,
-    lastBonus: 1,
-    bestJump: 0,
-    landings: 0,
-  }
+  return resetScoreState({} as ScoreState)
+}
+
+/**
+ * Puts a score back to the start of a run, in place (spec §10's restart).
+ *
+ * `bestJump` goes with it: it is this run's best landed air, and the PB it is
+ * measured against outlives the run somewhere the sim cannot see (spec §8.4).
+ */
+export function resetScoreState(score: ScoreState): ScoreState {
+  score.total = 0
+  score.jumps = 0
+  score.combo = 1
+  score.comboX = 0
+  score.clearance = Infinity
+  score.lastJump = 0
+  score.lastBonus = 1
+  score.bestJump = 0
+  score.landings = 0
+  return score
 }
 
 /**

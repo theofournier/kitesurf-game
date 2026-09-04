@@ -106,17 +106,22 @@ describe('drawHud', () => {
     expect(down).toContain('STEER THE KITE TO THE EDGE')
   })
 
-  it('says the run is over only once it is (spec §7.2)', () => {
-    const running = draw((view) => void (view.score.total = 900))
+  // What a run that ended says is the game-over card's, in overlay.test.ts. The
+  // HUD is the readout of a run in progress, and this is the assertion that it
+  // has not grown a second one: nothing in it changes when the run ends.
+  it('leaves the end of a run to the overlay (spec §8.4)', () => {
+    const running = draw((view) => {
+      view.x = 640.2
+      view.score.total = 900
+    })
     const over = draw((view) => {
       view.over = true
       view.x = 640.2
       view.score.total = 900
     })
 
-    expect(running).not.toContain('RUN OVER')
-    expect(over).toContain('RUN OVER')
-    expect(over).toContain('900 · 640m')
+    expect(over).toEqual(running)
+    expect(over).not.toContain('RUN OVER')
   })
 })
 
