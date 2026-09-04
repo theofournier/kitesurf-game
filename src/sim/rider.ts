@@ -16,8 +16,8 @@ import {
   windPower,
   type KiteState,
 } from './kite.ts'
+import { NO_KICKER, type Kicker } from './kicker.ts'
 import type { RiderInput } from './loop.ts'
-import { NO_KICKER, type Kicker } from './world.ts'
 
 /**
  * Float dust on the overload timer. STALL_GRACE is 24 steps of DT exactly, and
@@ -213,8 +213,21 @@ export function carveDrag(load: number, speed: number): number {
  * 35kt, so the ceiling is what the top tier actually rides against.
  */
 export function terminalSpeed(theta: number, wind: number): number {
-  const balance = Math.sqrt((driveFactor(theta) * windPower(wind) * TUNING.DRIVE_K) / TUNING.DRAG_K)
+  const balance = driveBalance(theta, wind)
   return balance > TUNING.MAX_SPEED ? TUNING.MAX_SPEED : balance
+}
+
+/**
+ * The same balance without the MAX_SPEED ceiling, m/s: the asymptote of
+ * `driveAccel` at this kite position rather than the speed the game allows.
+ *
+ * Separate from `terminalSpeed` because the spin-up time in fairness.ts is a
+ * closed form in this asymptote — `speed = balance * tanh(...)` — and the
+ * clamped value would put the asymptote below a speed the rider can actually
+ * reach, making a reachable obstacle look unreachable.
+ */
+export function driveBalance(theta: number, wind: number): number {
+  return Math.sqrt((driveFactor(theta) * windPower(wind) * TUNING.DRIVE_K) / TUNING.DRAG_K)
 }
 
 /**
@@ -253,6 +266,23 @@ export function capFlatImpulse(impulse: number): number {
   const cap = TUNING.FLAT_POP_CAP
   if (cap <= 0) return 0
   return impulse * Math.sqrt(cap / (peakHeight(impulse) + cap))
+}
+
+/**
+ * The uncapped impulse that `capFlatImpulse` turns into `capped` — its exact
+ * inverse, and Infinity for anything at or above the ceiling.
+ *
+ * The ceiling is asymptotic, so "what pop do I need?" has an answer for every
+ * height under FLAT_POP_CAP and no answer at all at or above it. That is the
+ * shape the spawn fairness of §9.2 needs: a pier is 3m of wall, and whether
+ * flat water can be made to clear it is the whole of why §9.1 marks it tier 3+.
+ */
+export function uncapFlatImpulse(capped: number): number {
+  const cap = TUNING.FLAT_POP_CAP
+  if (cap <= 0 || capped <= 0) return 0
+  const apex = peakHeight(capped)
+  if (apex >= cap) return Infinity
+  return capped * Math.sqrt(cap / (cap - apex))
 }
 
 /**

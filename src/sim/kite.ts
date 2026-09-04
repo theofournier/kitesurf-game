@@ -134,19 +134,43 @@ export function liftFactor(theta: number): number {
  */
 let peakShape = Number.NaN
 let peakValue = 1
+let peakAngle = 0
 
-function drivePeak(): number {
-  if (TUNING.DRIVE_SHAPE === peakShape) return peakValue
+function scanPeak(): void {
+  if (TUNING.DRIVE_SHAPE === peakShape) return
 
   let best = 0
+  let at = 0
   for (let theta = WINDOW_MIN; theta <= WINDOW_MAX; theta += PEAK_SCAN_STEP) {
     const value = driveFactor(theta)
-    if (value > best) best = value
+    if (value > best) {
+      best = value
+      at = theta
+    }
   }
 
   peakShape = TUNING.DRIVE_SHAPE
   peakValue = best > 0 ? best : 1
+  peakAngle = at
+}
+
+function drivePeak(): number {
+  scanPeak()
   return peakValue
+}
+
+/**
+ * Where on the arc `driveFactor` peaks, degrees — ~70.5 at the shipped
+ * DRIVE_SHAPE.
+ *
+ * This is where a rider carrying speed holds the kite, so it is the angle the
+ * spawn fairness of spec §9.2 has to assume a send starts from: the worst case
+ * is a rider who is going fast, and a rider who is going fast has the kite
+ * down here rather than anywhere convenient.
+ */
+export function drivePeakAngle(): number {
+  scanPeak()
+  return peakAngle
 }
 
 /**

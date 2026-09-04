@@ -1,11 +1,29 @@
-// The world the rider travels through: wind, waves, obstacles (spec §7.1, §9).
-// Obstacles land in a later session; this is the wind curve everything else
-// scales from, and the waves that are the only way past the flat-water cap.
+// The world the rider travels through: wind, the waves that are the only way
+// past the flat-water cap, and the lethal furniture between them (spec §7.1,
+// §9).
 //
-// Pure: no clock, no DOM. Randomness comes from the Rng on WorldState, so a
-// run is reproducible from its seed alone.
+// Everything in it comes out of one seeded stream, laid down in order of
+// position, so a run is reproducible from its seed alone — which is what buys
+// ghosts, replays and server-side replay validation.
+//
+// Pure: no clock, no DOM. Randomness comes from the Rng on WorldState.
 import { TUNING } from '../config/tuning.ts'
+import { clearable, earliestFair, runout } from './fairness.ts'
+import { clearKicker, WAVE, type Kicker, type WaveType } from './kicker.ts'
+import {
+  createObstacle,
+  initBoat,
+  initObstacle,
+  OBSTACLE,
+  type Obstacle,
+  type ObstacleType,
+} from './obstacles.ts'
 import { Rng } from './rng.ts'
+
+// The kicker struct and the three wave types live in kicker.ts so that rider.ts
+// can have them without importing the world (see the note there). They are part
+// of this module's surface all the same: a wave is what carries a kicker.
+export { createKicker, NO_KICKER, WAVE, type Kicker, type WaveType } from './kicker.ts'
 
 /**
  * Sentinel for "no override": take the wind from the curve. Zero is safe as a
@@ -35,27 +53,20 @@ export function windAt(_distance: number, override: number = WIND_AUTO): number 
 }
 
 /**
- * The three kickers (spec §4.1). Strings for the same reason PHASE is: they go
- * straight into the debug readout, and reading one out of this object
- * allocates nothing.
- */
-export const WAVE = {
-  /** 0.3m. Frequent, low reward, good for combo upkeep. */
-  CHOP: 'chop',
-  /** 1.0m. The bread-and-butter kicker. */
-  WAVE: 'wave',
-  /** 1.8m. The highest air in the game — and it sits beside a lethal boat. */
-  WAKE: 'wake',
-} as const
-
-export type WaveType = (typeof WAVE)[keyof typeof WAVE]
-
-/**
  * How many waves can be in play at once. A pool bound, not a gameplay value —
  * the spawn horizon and WAVE_GAP_MIN are what actually decide the density, and
  * this only has to be comfortably above what that pair can ask for.
  */
 const WAVE_POOL = 16
+
+/**
+ * How many obstacles can be in play at once. A pool bound like WAVE_POOL, and
+ * comfortably above what the generator can ask for: nothing is committed past
+ * the spawn horizon, so what is in play spans RECYCLE_M behind the rider to
+ * SPAWN_AHEAD_S of riding ahead of them — 162m, against a minimum obstacle gap
+ * that never drops below 60m even at tier 4.
+ */
+const OBSTACLE_POOL = 8
 
 /** Metres behind the rider a wave is kept before its slot is recycled. */
 const RECYCLE_M = 30
@@ -93,8 +104,26 @@ export interface Wave {
 export interface WorldState {
   /** Fixed pool. Recycled behind the rider, never reallocated. */
   waves: Wave[]
-  /** World x the generator has filled up to, m — the last lip it placed. */
+  /** Fixed pool of lethal objects (spec §9.1). Recycled the same way. */
+  obstacles: Obstacle[]
+  /**
+   * World x of the next lip, drawn but not yet placed — so the world is filled
+   * with waves everywhere below it.
+   *
+   * Held rather than redrawn because the two streams are committed in order of
+   * position and the comparison has to see both candidates: a draw that were
+   * repeated whenever the other stream went first would make the run depend on
+   * how it was flown rather than on its seed.
+   */
   spawnX: number
+  /** The same, for the next obstacle: the gate it will be measured against. */
+  obstacleX: number
+  /**
+   * World x the rider is next able to act from, m: where the last obstacle's
+   * jump puts them back on the water (`runout`). The gap of spec §9.2 is
+   * measured from here, not from the obstacle itself — see fairness.ts.
+   */
+  clearX: number
   rng: Rng
 }
 
@@ -167,38 +196,6 @@ export function kickerBonus(max: number, delta: number): number {
   return 1 + (max - 1) * (1 - t * t)
 }
 
-/**
- * What the water under the rider is worth to a pop taken right now.
- *
- * Preallocated and filled in place: `stepRider` reads one of these on the
- * release edge, and the loop owns the single instance.
- */
-export interface Kicker {
-  /** Multiplier on the pop impulse, 1 on flat water (spec §4.2). */
-  bonus: number
-  /** Upward velocity the face adds on takeoff, m/s. Not scaled by `bonus`. */
-  ramp: number
-  /** Seconds from the lip: negative approaching it, positive past it. */
-  delta: number
-  /** Which wave that came off, or null on flat water. */
-  type: WaveType | null
-}
-
-export function createKicker(): Kicker {
-  return { bonus: 1, ramp: 0, delta: 0, type: null }
-}
-
-/** Flat water: what every pop taken away from a wave is worth. */
-export const NO_KICKER: Kicker = Object.freeze(createKicker())
-
-function clearKicker(out: Kicker): Kicker {
-  out.bonus = 1
-  out.ramp = 0
-  out.delta = 0
-  out.type = null
-  return out
-}
-
 function createWave(): Wave {
   return {
     active: false,
@@ -229,7 +226,19 @@ export function initWave(wave: Wave, lipX: number, type: WaveType): Wave {
 export function createWorldState(seed: number): WorldState {
   const waves: Wave[] = []
   for (let i = 0; i < WAVE_POOL; i++) waves.push(createWave())
-  return { waves, spawnX: 0, rng: new Rng(seed) }
+
+  const obstacles: Obstacle[] = []
+  for (let i = 0; i < OBSTACLE_POOL; i++) obstacles.push(createObstacle())
+
+  const rng = new Rng(seed)
+  // Both streams start with a candidate in hand, drawn here so that the first
+  // step of a run has the same two-candidate comparison to make as every step
+  // after it. The wind is tier 1 at the start of every run by definition of the
+  // curve, so the first obstacle gap is drawn at WIND_BASE.
+  const spawnX = rng.range(TUNING.WAVE_GAP_MIN, TUNING.WAVE_GAP_MAX)
+  const obstacleX = obstacleGap(rng, TUNING.WIND_BASE)
+
+  return { waves, obstacles, spawnX, obstacleX, clearX: 0, rng }
 }
 
 /**
@@ -245,39 +254,144 @@ function rollType(rng: Rng): WaveType {
 }
 
 /** First slot not in play, or -1 when the pool is full. */
-function freeSlot(world: WorldState): number {
-  for (let i = 0; i < world.waves.length; i++) {
-    if (!world.waves[i].active) return i
+function freeSlot(pool: readonly { active: boolean }[]): number {
+  for (let i = 0; i < pool.length; i++) {
+    if (!pool[i].active) return i
   }
   return -1
 }
 
 /**
- * Keeps the world stocked with waves around `riderX`: recycles what is behind,
- * fills the horizon ahead.
+ * How far the next obstacle is drawn, m (spec §9.2's density rule).
  *
- * The generator is keyed off distance rather than time, so the stream of waves
- * a seed produces is the same however the run is flown — that is what makes a
- * replay replay. The fair-spawn rules of spec §9.2 belong to obstacles and land
- * with them; waves are never lethal, so a gap and a weighted roll is the whole
- * of the generation they need for now.
+ * Both ends of the range shrink with the wind, and the maximum shrinks faster
+ * than the minimum — that is what tightens the rhythm rather than merely
+ * speeding it up. At tier 1 the draw is 110–320m and at tier 4 it is 64–89m: a
+ * loose, sparse sea becomes a drumbeat.
+ *
+ * The fairness floor is applied afterwards, at the commit, and always wins.
  */
-export function stepWorld(world: WorldState, riderX: number): void {
+function obstacleGap(rng: Rng, wind: number): number {
+  const scale = wind > 0 ? TUNING.WIND_BASE / wind : 1
+  const min = TUNING.OBSTACLE_GAP_MIN * scale ** TUNING.DENSITY_MIN_EXP
+  const max = TUNING.OBSTACLE_GAP_MAX * scale ** TUNING.DENSITY_MAX_EXP
+  return rng.range(min, max > min ? max : min)
+}
+
+/**
+ * Which of the two free-standing obstacles the stream asks for next.
+ *
+ * A pier that this wind cannot clear is not rolled away and retried, it is
+ * simply not a pier: the draw is spent either way, so what the wind allows
+ * changes what comes out of the stream without changing the stream itself.
+ */
+function rollObstacleType(rng: Rng, wind: number): ObstacleType {
+  const roll = rng.next()
+  if (roll < TUNING.OBSTACLE_MIX_PIER && clearable(OBSTACLE.PIER, wind)) return OBSTACLE.PIER
+  return OBSTACLE.BUOY
+}
+
+/**
+ * Gives a committed wake the boat that made it (spec §9.2).
+ *
+ * A boat is never placed on its own. §4.1 calls the 1.8m kicker a boat wake and
+ * says it sits beside a lethal boat, so that is exactly what it is: the wake is
+ * the launch and the boat is the reason to take it, and the two are positioned
+ * as one object by `initBoat`. A wake whose lip is too close behind the last
+ * obstacle to be a fair launch simply carries no boat — that is what "push it
+ * further out" means for a pair that cannot be moved apart.
+ */
+function placeBoat(world: WorldState, lipX: number, wind: number): void {
+  if (!clearable(OBSTACLE.BOAT, wind)) return
+  if (lipX < earliestFair(world.clearX, OBSTACLE.BOAT, wind)) return
+
+  const slot = freeSlot(world.obstacles)
+  if (slot < 0) return
+
+  initBoat(world.obstacles[slot], lipX)
+  world.clearX = lipX + runout(OBSTACLE.BOAT)
+}
+
+/**
+ * Places the pending wave, and returns false if the pool has no room for it.
+ *
+ * The false is a stall, not a skip: leaving the horizon short keeps the stream
+ * in step, where dropping a wave from it would give the same seed two different
+ * worlds depending on how full the pool happened to be.
+ */
+function commitWave(world: WorldState, override: number): boolean {
+  const slot = freeSlot(world.waves)
+  if (slot < 0) return false
+
+  const lipX = world.spawnX
+  const type = rollType(world.rng)
+  initWave(world.waves[slot], lipX, type)
+  if (type === WAVE.WAKE) placeBoat(world, lipX, windAt(lipX, override))
+
+  world.spawnX = lipX + world.rng.range(TUNING.WAVE_GAP_MIN, TUNING.WAVE_GAP_MAX)
+  return true
+}
+
+/**
+ * Places the pending obstacle, pushing it out until the fairness gate of §9.2
+ * passes. Returns false if the pool has no room, on the same terms as waves.
+ */
+function commitObstacle(world: WorldState, override: number): boolean {
+  const slot = freeSlot(world.obstacles)
+  if (slot < 0) return false
+
+  // The wind is read at the spawn's own position rather than at the rider's, so
+  // that what the stream lays down is a function of where it lays it down. The
+  // rider's own wind would make the world depend on how far into a frame the
+  // generator happened to be called, which is the one thing a replay cannot
+  // survive.
+  const wind = windAt(world.obstacleX, override)
+  const type = rollObstacleType(world.rng, wind)
+  // Rolled where the candidate stood, placed where the gate allows. Wind only
+  // ever rises with distance, so a push can turn down a pier the far end of it
+  // would have allowed, and can never smuggle one into water too light for it.
+  const at = Math.max(world.obstacleX, earliestFair(world.clearX, type, wind))
+
+  initObstacle(world.obstacles[slot], at, type)
+  world.clearX = at + runout(type)
+  world.obstacleX = at + obstacleGap(world.rng, windAt(at, override))
+  return true
+}
+
+/**
+ * Keeps the world stocked around `riderX`: recycles what is behind, fills the
+ * horizon ahead with waves and with the lethal furniture between them.
+ *
+ * The generator is keyed off distance rather than time, so the stream a seed
+ * produces is the same however the run is flown — that is what makes a replay
+ * replay. `override` is the run's wind override rather than its current wind
+ * for the same reason: the wind a spawn is judged in is the wind at the spawn's
+ * own position, which the rider's progress cannot move.
+ *
+ * Waves and obstacles come out of one rng in strict order of position, never
+ * two streams taking turns. Two would be simpler to read and impossible to
+ * replay: the fairness gate makes each spawn depend on what has already been
+ * committed, so the order the draws happen in has to be a function of the world
+ * and not of which stream the frame boundary happened to fall in.
+ */
+export function stepWorld(world: WorldState, riderX: number, override: number = WIND_AUTO): void {
   const behind = riderX - RECYCLE_M
   for (let i = 0; i < world.waves.length; i++) {
     const wave = world.waves[i]
     if (wave.active && wave.lipX < behind) wave.active = false
   }
+  for (let i = 0; i < world.obstacles.length; i++) {
+    const obstacle = world.obstacles[i]
+    if (obstacle.active && obstacle.x + obstacle.len < behind) obstacle.active = false
+  }
 
   const horizon = riderX + TUNING.MAX_SPEED * SPAWN_AHEAD_S
-  while (world.spawnX < horizon) {
-    const slot = freeSlot(world)
-    // Pool full: leave the horizon short rather than dropping a wave from the
-    // stream, so the same seed still lays down the same waves in the same order.
-    if (slot < 0) return
-    const lipX = world.spawnX + world.rng.range(TUNING.WAVE_GAP_MIN, TUNING.WAVE_GAP_MAX)
-    initWave(world.waves[slot], lipX, rollType(world.rng))
-    world.spawnX = lipX
+  while (world.spawnX < horizon || world.obstacleX < horizon) {
+    if (world.spawnX <= world.obstacleX) {
+      if (!commitWave(world, override)) return
+    } else if (!commitObstacle(world, override)) {
+      return
+    }
   }
 }
 

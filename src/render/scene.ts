@@ -4,14 +4,15 @@ import { drawAltitudeShadow, drawSpray, drawVerdict, type Effects } from './effe
 import { drawGhostMarker, drawKite, drawWindowArc } from './drawKite.ts'
 import { drawRider } from './drawRider.ts'
 import { drawSky, drawWater } from './layers.ts'
+import { drawObstacles } from './drawObstacles.ts'
 import { drawWaves } from './drawWaves.ts'
 import type { RenderView } from './view.ts'
 
 /**
  * Draws one frame.
  *
- * Back to front: sky, water, the waves standing on it, the rider's shadow on
- * it, then the window arc and its ghost marker — both behind the rider, because
+ * Back to front: sky, water, the waves standing on it, the lethal furniture
+ * standing in front of them, the rider's shadow on the water, then the window arc and its ghost marker — both behind the rider, because
  * they are the surface the kite flies on rather than objects in the scene —
  * then the rider, then the lines and the kite over the top of everything, then
  * the spray.
@@ -36,6 +37,7 @@ export function drawScene(
   drawSky(ctx, view.width, camera, fx.shake)
   drawWater(ctx, view.width, view.height, camera, fx.shake)
   drawWaves(ctx, camera, view)
+  drawObstacles(ctx, camera, view)
   drawAltitudeShadow(ctx, camera, view)
 
   drawWindowArc(ctx, camera)

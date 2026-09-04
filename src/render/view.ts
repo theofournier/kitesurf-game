@@ -5,11 +5,13 @@
 // one place and keeps every draw function a pure function of a plain struct.
 import { lineTension } from '../sim/kite.ts'
 import type { SimState } from '../sim/loop.ts'
+import type { Obstacle } from '../sim/obstacles.ts'
 import { LAND_REASON, PHASE, type LandReason, type Phase } from '../sim/rider.ts'
 import type { Wave } from '../sim/world.ts'
 
-/** What a view holds before the first frame: no world, so no waves. */
+/** What a view holds before the first frame: no world, so nothing in it. */
 const NO_WAVES: readonly Wave[] = []
+const NO_OBSTACLES: readonly Obstacle[] = []
 
 /** The sim values worth interpolating: everything that moves on screen. */
 export interface Snapshot {
@@ -53,6 +55,8 @@ export interface RenderView extends Snapshot {
    * as read-only, which is the same contract every other field here has.
    */
   waves: readonly Wave[]
+  /** The world's obstacle pool (spec §9.1), by reference and on the same terms. */
+  obstacles: readonly Obstacle[]
 }
 
 export function createSnapshot(): Snapshot {
@@ -78,6 +82,7 @@ export function createView(): RenderView {
     landingReason: LAND_REASON.NONE,
     landings: 0,
     waves: NO_WAVES,
+    obstacles: NO_OBSTACLES,
   }
 }
 
@@ -126,5 +131,6 @@ export function interpolateView(
   view.landingReason = state.rider.landingReason
   view.landings = state.rider.landings
   view.waves = state.world.waves
+  view.obstacles = state.world.obstacles
   view.tension = lineTension(view.kiteAngle, view.speed, view.wind)
 }

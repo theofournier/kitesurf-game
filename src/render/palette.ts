@@ -29,6 +29,13 @@ export const PALETTE = {
   waveFoam: 'rgba(226, 244, 250, 0.92)',
   waveFoamWake: 'rgba(159, 242, 255, 0.96)',
   waveGuide: 'rgba(196, 230, 246, 0.20)',
+  // Obstacles (spec §9.1). Warm and solid against water that is cold and flat,
+  // because the one thing the player has to read at a glance is which shapes on
+  // the horizon are water and which are the end of the run. The top edge is the
+  // brightest part of each: it is the line the jump has to beat.
+  hull: '#4a3a3f',
+  hullTop: '#e9d7c6',
+  hullMark: '#ff8b6a',
   // The pointer's aiming reticle (spec §5.2). It is on screen for the whole
   // run, over sky and over water, so it carries its own dark halo — a light
   // reticle alone disappears against the haze and a dark one against the sea.

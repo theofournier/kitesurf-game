@@ -5,7 +5,13 @@ import { createDesktopInput } from './input/desktop.ts'
 import { createTouchInput } from './input/touch.ts'
 import { unlockAudioOnFirstGesture } from './platform/audio.ts'
 import { lockLandscape } from './platform/orientation.ts'
-import { advance, createAccumulator, createInput, createSimState } from './sim/loop.ts'
+import {
+  advance,
+  createAccumulator,
+  createInput,
+  createSimState,
+  type SimState,
+} from './sim/loop.ts'
 import { LAND_REASON, PHASE } from './sim/rider.ts'
 import { WIND_AUTO } from './sim/world.ts'
 import { createCamera, updateCamera } from './render/camera.ts'
@@ -109,6 +115,11 @@ function watchDpr(): void {
  * `lipDelta` is the miss on the last pop and `lipAhead` the one being set up
  * right now, both in seconds: negative early, positive late. Between them they
  * answer the question the build plan's turn 3 asks the telegraph to answer.
+ *
+ * `obstacle` is the metres left to the next thing that has to be jumped, and
+ * `hit` the last one that was not. Contact is fatal in spec §7.2 and nothing
+ * ends a run yet, so until the tiers land this readout is the only place a
+ * collision shows up at all.
  */
 const readout = {
   kiteAngle: 0,
@@ -128,11 +139,33 @@ const readout = {
   kicker: 1,
   lipDelta: 0,
   lipAhead: 0,
+  obstacle: 0,
+  hit: 'none' as string,
   fps: 0,
   tick: 0,
   time: 0,
   steps: 0,
   alpha: 0,
+}
+
+/**
+ * Metres from the rider to the gate of the next obstacle ahead — a wake lip for
+ * a boat, the object itself otherwise — or Infinity with nothing in front.
+ *
+ * Walks the pool rather than caching: it is eight slots once a frame, on the
+ * render side of the loop where a debug readout belongs.
+ */
+function gapToNextObstacle(state: SimState): number {
+  const obstacles = state.world.obstacles
+  let nearest = Infinity
+
+  for (let i = 0; i < obstacles.length; i++) {
+    if (!obstacles[i].active) continue
+    const ahead = obstacles[i].gateX - state.rider.x
+    if (ahead > 0 && ahead < nearest) nearest = ahead
+  }
+
+  return nearest
 }
 
 let previousTime = 0
@@ -187,6 +220,8 @@ function frame(now: number): void {
     readout.kicker = state.rider.lastKicker
     readout.lipDelta = state.rider.lastLip
     readout.lipAhead = state.kicker.delta
+    readout.obstacle = gapToNextObstacle(state)
+    if (state.hit !== null) readout.hit = state.hit.type
     readout.tick = state.tick
     readout.time = state.time
     readout.steps = steps

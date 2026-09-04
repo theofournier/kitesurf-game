@@ -304,6 +304,49 @@ export const TUNING_SCHEMA: TuningGroup[] = [
         comment: 's of warning a wave gets before its lip',
         fields: [{ min: 1.5 }],
       },
+      { key: 'OBSTACLE_GAP_MIN', comment: 'm between one obstacle and the next, at tier 1' },
+      { key: 'OBSTACLE_GAP_MAX' },
+      // The two density exponents are curve shapes rather than distances: 0 is
+      // a gap that ignores the wind entirely, 2 is one that collapses with it.
+      {
+        key: 'DENSITY_MIN_EXP',
+        comment: 'how hard the wind shrinks the minimum gap',
+        fields: [{ min: 0, max: 2 }],
+      },
+      {
+        key: 'DENSITY_MAX_EXP',
+        comment: 'the maximum shrinks faster, so the rhythm tightens',
+        fields: [{ min: 0, max: 2 }],
+      },
+      {
+        key: 'OBSTACLE_MIX_PIER',
+        comment: 'share of the non-boat obstacles that are piers, where the wind allows one',
+        fields: [{ min: 0, max: 1 }],
+      },
+    ],
+  },
+  {
+    title: 'obstacles (spec §9.1)',
+    slots: [
+      { key: 'BUOY_H', comment: 'm of lethal height' },
+      { key: 'BUOY_LEN', comment: 'm of water it occupies' },
+      { key: 'BOAT_HULL_H', comment: 'm' },
+      { key: 'BOAT_MAST_H', comment: 'm' },
+      { key: 'BOAT_LEN', comment: 'm, stern to bow' },
+      // Where the mast stands is a share of the hull, so it cannot be dragged
+      // off the boat it belongs to.
+      {
+        key: 'BOAT_MAST_AT',
+        comment: 'share of the hull length the mast stands at',
+        fields: [{ min: 0, max: 1 }],
+      },
+      {
+        key: 'BOAT_WAKE_LEAD',
+        comment: 'm from the wake lip to the stern — the arc a pop has to span',
+      },
+      { key: 'PIER_H', comment: 'm of wall' },
+      { key: 'PIER_LEN', comment: 'm' },
+      { key: 'CLEAR_MARGIN', comment: 'm of air a spawn has to be clearable by' },
     ],
   },
 ]

@@ -104,4 +104,21 @@ export const TUNING = {
   WAVE_MIX_CHOP: 0.55,    // share of waves that are chop
   WAVE_MIX_WAVE: 0.35,    // share that are waves — boat wakes take the rest
   WAVE_LEAD: 2.5,         // s of warning a wave gets before its lip
+  OBSTACLE_GAP_MIN: 110,  // m between one obstacle and the next, at tier 1
+  OBSTACLE_GAP_MAX: 320,
+  DENSITY_MIN_EXP: 0.5,   // how hard the wind shrinks the minimum gap
+  DENSITY_MAX_EXP: 1.2,   // the maximum shrinks faster, so the rhythm tightens
+  OBSTACLE_MIX_PIER: 0.25, // share of the non-boat obstacles that are piers, where the wind allows one
+
+  // obstacles (spec §9.1)
+  BUOY_H: 0.5,            // m of lethal height
+  BUOY_LEN: 0.8,          // m of water it occupies
+  BOAT_HULL_H: 2.4,       // m
+  BOAT_MAST_H: 4,         // m
+  BOAT_LEN: 8,            // m, stern to bow
+  BOAT_MAST_AT: 0.5,      // share of the hull length the mast stands at
+  BOAT_WAKE_LEAD: 8,      // m from the wake lip to the stern — the arc a pop has to span
+  PIER_H: 3,              // m of wall
+  PIER_LEN: 4,            // m
+  CLEAR_MARGIN: 0.5,      // m of air a spawn has to be clearable by
 }

@@ -1,6 +1,7 @@
 // Fixed-timestep accumulator (spec §11.2). Physics is never tied to frame rate.
 import { TUNING } from '../config/tuning.ts'
 import { createRiderState, stepRider, type RiderState } from './rider.ts'
+import { hitObstacle, type Obstacle } from './obstacles.ts'
 import {
   createKicker,
   createWorldState,
@@ -50,6 +51,16 @@ export interface SimState {
   /** Wind at the rider's distance, kt. Derived, never integrated (spec §7.1). */
   wind: number
   /**
+   * The obstacle the rider ran into on this step, or null for a clean pass
+   * (spec §9.1).
+   *
+   * Recorded rather than acted on. Contact is fatal and a fatal crash ends the
+   * run, but the run structure that ends is spec §7.2's and lands with the
+   * tiers — so this is the sim reporting what happened, and nothing reads it
+   * yet but the debug panel and the tests.
+   */
+  hit: Obstacle | null
+  /**
    * Debug: forces `wind` to a fixed kt, ignoring distance. WIND_AUTO leaves the
    * curve alone, and that is what every run starts on — a recorded run replays
    * the wind it was ridden at because the override travels with the state.
@@ -71,6 +82,7 @@ export function createSimState(seed: number = DEFAULT_SEED): SimState {
     world: createWorldState(seed),
     kicker: createKicker(),
     wind: TUNING.WIND_BASE,
+    hit: null,
     windOverride: WIND_AUTO,
   }
 }
@@ -100,10 +112,24 @@ export function step(state: SimState, input: RiderInput, dt: number): SimState {
   // rider arrived with, and the release inside stepRider spends it. That leaves
   // the lip timing at most one step stale against a 300ms window — a twentieth
   // of it — and keeps the rider from having to know what a wave is.
-  stepWorld(state.world, state.rider.x)
+  stepWorld(state.world, state.rider.x, state.windOverride)
   kickerAt(state.kicker, state.world, state.rider.x, state.rider.speed)
 
+  // Where the step started, so contact is a swept test over the whole of it
+  // rather than a sample at the end: at MAX_SPEED a step covers 0.37m and a
+  // buoy is 0.8m wide.
+  const fromX = state.rider.x
+  const fromAlt = state.rider.altitude
+
   stepRider(state.rider, input, state.wind, dt, state.kicker)
+
+  state.hit = hitObstacle(
+    state.world.obstacles,
+    fromX,
+    fromAlt,
+    state.rider.x,
+    state.rider.altitude,
+  )
   return state
 }
 
